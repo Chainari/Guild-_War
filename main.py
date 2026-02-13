@@ -134,7 +134,6 @@ class ConfigModal(Modal, title='ตั้งค่า War'):
         self.title_input = TextInput(label='หัวข้อ (Title)', default=war_config["title"], required=True)
         self.add_item(self.title_input)
         
-        # ถ้าเลือก Manual ให้โชว์ช่องกรอกวันที่
         if needs_date_input:
             self.date_input = TextInput(label='วันที่ (DD/MM)', placeholder="เช่น 25/12", required=True)
             self.add_item(self.date_input)
@@ -146,21 +145,15 @@ class ConfigModal(Modal, title='ตั้งค่า War'):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            # Validate Time
             datetime.strptime(self.time_input.value, "%H:%M")
-            
             war_config["title"] = self.title_input.value
             war_config["time"] = self.time_input.value
-            
-            # ถ้าเลือก Manual ให้เอาค่าจากช่องกรอก ถ้าเลือกจากเมนูให้เอาค่าที่ส่งมา
             if self.date_input:
                 war_config["date"] = self.date_input.value.strip()
             else:
                 war_config["date"] = self.selected_date
 
             await send_log(interaction, "⚙️ แก้ไข Config", f"Title: {war_config['title']}\nDate: {war_config['date']}\nTime: {war_config['time']}", discord.Color.blue())
-            
-            # Update Setup Embed
             await interaction.response.edit_message(content=None, embed=create_setup_embed(), view=SetupView())
         except ValueError:
             await interaction.response.send_message("❌ รูปแบบเวลาผิด (ใช้ HH:MM)", ephemeral=True, delete_after=5.0)
@@ -169,33 +162,22 @@ class DateSelect(Select):
     def __init__(self):
         options = []
         now = bangkok_now()
-
-        # 1. Manual Option (Moved to TOP)
         options.append(discord.SelectOption(label="✏️ กรอกวันที่เอง...", value="manual", emoji="📝", description="พิมพ์วันที่เอง เช่น 25/12"))
-        
-        # 2. Today
         options.append(discord.SelectOption(label=f"วันนี้ ({now.strftime('%d/%m')})", value="Today", emoji="🟢", description="เซ็ตเป็นวันปัจจุบัน"))
-        
-        # 3. Tomorrow
         tmr = now + timedelta(days=1)
         options.append(discord.SelectOption(label=f"พรุ่งนี้ ({tmr.strftime('%d/%m')})", value="Tomorrow", emoji="🟡", description="เซ็ตเป็นวันพรุ่งนี้"))
-        
-        # 4. Next 12 days
         for i in range(2, 14):
             d = now + timedelta(days=i)
-            day_name = d.strftime("%A") # Monday, Tuesday...
+            day_name = d.strftime("%A")
             date_str = d.strftime("%d/%m")
             options.append(discord.SelectOption(label=f"{day_name} ที่ {date_str}", value=date_str, emoji="🗓️"))
-            
         super().__init__(placeholder="📅 เลือกวันที่จัด War...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         selected = self.values[0]
         if selected == "manual":
-            # Show modal WITH date input
             await interaction.response.send_modal(ConfigModal(selected, needs_date_input=True))
         else:
-            # Show modal WITHOUT date input (Date locked)
             await interaction.response.send_modal(ConfigModal(selected, needs_date_input=False))
 
 class DatePickerView(View):
@@ -234,7 +216,6 @@ class SetupView(View):
     
     @discord.ui.button(label="📅 เลือกวัน/เวลา/หัวข้อ", style=discord.ButtonStyle.primary, row=1)
     async def edit_config(self, interaction: discord.Interaction, button: Button):
-        # Step 1: Send Date Picker
         await interaction.response.send_message("👇 **กรุณาเลือกวันที่ต้องการจัด War:**", view=DatePickerView(), ephemeral=True)
 
     @discord.ui.button(label="➕ เพิ่มทีม", style=discord.ButtonStyle.secondary, row=1)
@@ -244,6 +225,12 @@ class SetupView(View):
     @discord.ui.button(label="➖ ลบทีมล่าสุด", style=discord.ButtonStyle.secondary, row=1)
     async def remove_team(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(RemoveTeamModal())
+
+    @discord.ui.button(label="🗑️ ล้างรายชื่อเก่า (Reset)", style=discord.ButtonStyle.danger, row=2)
+    async def clear_roster(self, interaction: discord.Interaction, button: Button):
+        db_clear()
+        await send_log(interaction, "🗑️ ล้างรายชื่อ (Manual Reset)", "Admin กดล้างรายชื่อก่อนเริ่มวอ", discord.Color.red())
+        await interaction.response.send_message("✅ **ล้างรายชื่อเก่าเรียบร้อย!** พร้อมสำหรับการเริ่มประกาศใหม่", ephemeral=True)
 
     @discord.ui.button(label="✅ ยืนยันและประกาศ", style=discord.ButtonStyle.green, row=2)
     async def confirm(self, interaction: discord.Interaction, button: Button):
@@ -263,6 +250,7 @@ def create_setup_embed():
     embed.add_field(name="⏰ เวลา", value=f"{war_config['time']} น.", inline=True)
     team_list = "\n".join([f"{i+1}. {t}" for i, t in enumerate(war_config["teams"])])
     embed.add_field(name=f"🛡️ ทีมทั้งหมด ({len(war_config['teams'])})", value=f"```\n{team_list}\n```", inline=False)
+    embed.set_footer(text="💡 อย่าลืมกด 'ล้างรายชื่อเก่า' หากต้องการเริ่มนับจำนวนคนใหม่")
     return embed
 
 # ==========================================
@@ -413,19 +401,17 @@ def create_dashboard_embed():
             role_emoji = "⚔️" if "DPS" in role else "🛡️" if "Tank" in role else "🌿"
             roster[team].append(f"> {role_emoji} **{username}** 🕒 `{time_text}`")
 
-    # --- 🕒 ADVANCED DATE PARSING ---
     try:
         tz = pytz.timezone('Asia/Bangkok')
         now_th = datetime.now(tz)
         war_time_obj = datetime.strptime(war_config['time'], "%H:%M")
         
         date_input = war_config.get('date', 'Today').lower().strip()
-        target_date = now_th.date() # Default
+        target_date = now_th.date()
 
         if date_input in ['tomorrow', 'พรุ่งนี้']:
             target_date = now_th.date() + timedelta(days=1)
         elif date_input not in ['today', 'วันนี้']:
-            # Try parsing DD/MM or DD-MM
             clean_date = date_input.replace('-', '/')
             try:
                 parsed_date = datetime.strptime(clean_date, "%d/%m")
@@ -442,7 +428,6 @@ def create_dashboard_embed():
         time_display = f"📅 **{date_pretty}**\n<t:{ts}:F> • <t:{ts}:R>" 
     except Exception as e:
         time_display = f"{war_config['date']} - {war_config['time']}"
-    # --------------------------------
 
     lock_text = "🔒 SYSTEM LOCKED" if is_roster_locked else "🟢 OPEN REGISTRATION"
     color = 0xff2e4c if is_roster_locked else 0x00f7ff
