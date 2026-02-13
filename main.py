@@ -6,7 +6,14 @@ from discord.ui import Button, View, Select, Modal, TextInput
 import sqlite3
 import csv
 import io
+import pytz
 from datetime import datetime
+
+# ==========================================
+# 🕒 TIMEZONE HELPER (เพิ่มส่วนนี้)
+# ==========================================
+def bangkok_now():
+    return datetime.now(pytz.timezone('Asia/Bangkok'))
 
 # ==========================================
 # ⚙️ CONFIGURATION
@@ -102,11 +109,11 @@ def db_get_leaderboard():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     # นับจำนวนครั้งที่ status = Joined ของแต่ละคน
-    c.execute('''SELECT username, COUNT(*) as count 
-                FROM history 
-                WHERE status = 'Joined' 
-                GROUP BY user_id 
-                ORDER BY count DESC 
+    c.execute('''SELECT username, COUNT(*) as count
+                FROM history
+                WHERE status = 'Joined'
+                GROUP BY user_id
+                ORDER BY count DESC
                 LIMIT 10''')
     data = c.fetchall()
     conn.close()
@@ -119,7 +126,8 @@ async def send_log(interaction: discord.Interaction, action_name: str, details: 
     if LOG_CHANNEL_ID == 0: return
     channel = interaction.client.get_channel(LOG_CHANNEL_ID)
     if channel:
-        embed = discord.Embed(title=f"📝 บันทึกกิจกรรม: {action_name}", color=color, timestamp=datetime.now())
+        # ใช้ bangkok_now() เพื่อให้เวลา log ตรงกับไทย
+        embed = discord.Embed(title=f"📝 บันทึกกิจกรรม: {action_name}", color=color, timestamp=bangkok_now())
         embed.add_field(name="User", value=f"{interaction.user.display_name} ({interaction.user.name})", inline=True)
         embed.add_field(name="Details", value=details, inline=False)
         if interaction.user.avatar:
@@ -317,8 +325,8 @@ class MainWarView(View):
             await interaction.response.send_message("⛔ Admin Only", ephemeral=True)
             return
             
-        # บันทึกประวัติ
-        today = datetime.now().strftime('%Y-%m-%d')
+        # บันทึกประวัติ (ใช้เวลาไทย)
+        today = bangkok_now().strftime('%Y-%m-%d')
         count = db_save_history(today)
         
         # ล้างข้อมูลรายชื่อ
@@ -351,12 +359,18 @@ def create_dashboard_embed():
             roster[team].append(f"> {role_emoji} **{username}** 🕒 `{time_text}`")
 
     try:
+        # คำนวณ Timestamp โดยใช้ Timezone ไทย
         war_time_obj = datetime.strptime(war_config['time'], "%H:%M")
-        now = datetime.now()
-        target_dt = now.replace(hour=war_time_obj.hour, minute=war_time_obj.minute, second=0, microsecond=0)
+        tz = pytz.timezone('Asia/Bangkok')
+        now_th = datetime.now(tz)
+        
+        # สร้าง datetime แบบ aware (มี timezone)
+        target_dt = tz.localize(datetime(now_th.year, now_th.month, now_th.day, war_time_obj.hour, war_time_obj.minute))
+        
         ts = int(target_dt.timestamp())
         time_display = f"<t:{ts}:F> • <t:{ts}:R>" 
-    except: time_display = war_config['time']
+    except:
+        time_display = war_config['time']
 
     lock_text = "🔒 SYSTEM LOCKED" if is_roster_locked else "🟢 OPEN REGISTRATION"
     color = 0xff2e4c if is_roster_locked else 0x00f7ff
@@ -385,7 +399,8 @@ def create_dashboard_embed():
         embed.add_field(name="▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", value=f"🏳️ **Absence List ({stats['Absence']})**", inline=False)
         embed.add_field(name="\u200b", value="\n".join(roster["Absence"]), inline=False)
         
-    embed.set_footer(text=f"STATUS: {lock_text} | Last Updated: {datetime.now().strftime('%H:%M:%S')}")
+    # ใช้ bangkok_now() สำหรับเวลา Last Updated
+    embed.set_footer(text=f"STATUS: {lock_text} | Last Updated: {bangkok_now().strftime('%H:%M:%S')}")
     return embed
 
 # ==========================================
@@ -449,4 +464,4 @@ async def shutdown(interaction: discord.Interaction):
     await interaction.response.send_message("👋 Bye", ephemeral=True)
     await bot.close()
 
-bot.run(os.getenv('DISCORD_TOKEN'))
+bot.run('D')
