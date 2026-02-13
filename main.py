@@ -4,13 +4,11 @@ import discord
 from discord.ext import commands, tasks
 from discord.ui import Button, View, Select, Modal, TextInput
 import sqlite3
-import csv
-import io
 import pytz
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ==========================================
-# 🕒 TIMEZONE HELPER (เพิ่มส่วนนี้)
+# 🕒 TIMEZONE HELPER
 # ==========================================
 def bangkok_now():
     return datetime.now(pytz.timezone('Asia/Bangkok'))
@@ -23,6 +21,7 @@ LOG_CHANNEL_ID = 1471767919112486912
 
 war_config = {
     "title": "Guild War Roster",
+    "date": "Today",
     "time": "19:30",
     "teams": ["Team ATK", "Team Flex"],
     "ALERT_CHANNEL_ID": None
@@ -31,12 +30,11 @@ war_config = {
 is_roster_locked = False
 
 # ==========================================
-# 🗄️ DATABASE SYSTEM (เพิ่มตาราง History)
+# 🗄️ DATABASE SYSTEM
 # ==========================================
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # ตารางลงชื่อปัจจุบัน
     c.execute('''CREATE TABLE IF NOT EXISTS registrations
                 (user_id INTEGER PRIMARY KEY,
                 username TEXT,
@@ -44,13 +42,12 @@ def init_db():
                 role TEXT,
                 time_text TEXT)''')
     
-    # ตารางประวัติ (History) เก็บสถิติระยะยาว
     c.execute('''CREATE TABLE IF NOT EXISTS history
                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT,
                 user_id INTEGER,
                 username TEXT,
-                status TEXT)''') # status = มา (Joined) หรือ ลา (Absence)
+                status TEXT)''')
     conn.commit()
     conn.close()
 
@@ -84,36 +81,29 @@ def db_clear():
     conn.commit()
     conn.close()
 
-# ฟังก์ชันบันทึกประวัติ (Save History)
 def db_save_history(date_str):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    
-    # ดึงคนปัจจุบัน
     c.execute("SELECT user_id, username, team FROM registrations")
     rows = c.fetchall()
-    
     count = 0
     for uid, name, team in rows:
         status = "Absence" if team == "Absence" else "Joined"
         c.execute("INSERT INTO history (date, user_id, username, status) VALUES (?, ?, ?, ?)", 
                 (date_str, uid, name, status))
         count += 1
-        
     conn.commit()
     conn.close()
     return count
 
-# ฟังก์ชันดึง Top 10
 def db_get_leaderboard():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # นับจำนวนครั้งที่ status = Joined ของแต่ละคน
-    c.execute('''SELECT username, COUNT(*) as count
-                FROM history
-                WHERE status = 'Joined'
-                GROUP BY user_id
-                ORDER BY count DESC
+    c.execute('''SELECT username, COUNT(*) as count 
+                FROM history 
+                WHERE status = 'Joined' 
+                GROUP BY user_id 
+                ORDER BY count DESC 
                 LIMIT 10''')
     data = c.fetchall()
     conn.close()
@@ -126,7 +116,6 @@ async def send_log(interaction: discord.Interaction, action_name: str, details: 
     if LOG_CHANNEL_ID == 0: return
     channel = interaction.client.get_channel(LOG_CHANNEL_ID)
     if channel:
-        # ใช้ bangkok_now() เพื่อให้เวลา log ตรงกับไทย
         embed = discord.Embed(title=f"📝 บันทึกกิจกรรม: {action_name}", color=color, timestamp=bangkok_now())
         embed.add_field(name="User", value=f"{interaction.user.display_name} ({interaction.user.name})", inline=True)
         embed.add_field(name="Details", value=details, inline=False)
@@ -135,22 +124,88 @@ async def send_log(interaction: discord.Interaction, action_name: str, details: 
         await channel.send(embed=embed)
 
 # ==========================================
-# 🛠️ SETUP & DYNAMIC MENU
+# 🗓️ DATE PICKER SYSTEM
 # ==========================================
-class EditConfigModal(Modal, title='แก้ไขข้อมูลพื้นฐาน'):
-    title_input = TextInput(label='หัวข้อ / วันที่', default=war_config["title"], required=True)
-    time_input = TextInput(label='เวลาเริ่ม (HH:MM)', default=war_config["time"], placeholder="Ex. 19:30", required=True, max_length=5)
+class ConfigModal(Modal, title='ตั้งค่า War'):
+    def __init__(self, selected_date, needs_date_input=False):
+        super().__init__()
+        self.selected_date = selected_date
+        
+        self.title_input = TextInput(label='หัวข้อ (Title)', default=war_config["title"], required=True)
+        self.add_item(self.title_input)
+        
+        # ถ้าเลือก Manual ให้โชว์ช่องกรอกวันที่
+        if needs_date_input:
+            self.date_input = TextInput(label='วันที่ (DD/MM)', placeholder="เช่น 25/12", required=True)
+            self.add_item(self.date_input)
+        else:
+            self.date_input = None
+
+        self.time_input = TextInput(label='เวลาเริ่ม (HH:MM)', default=war_config["time"], placeholder="Ex. 19:30", required=True, max_length=5)
+        self.add_item(self.time_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
+            # Validate Time
             datetime.strptime(self.time_input.value, "%H:%M")
+            
             war_config["title"] = self.title_input.value
             war_config["time"] = self.time_input.value
-            await send_log(interaction, "⚙️ แก้ไข Config", f"Title: {war_config['title']}\nTime: {war_config['time']}", discord.Color.blue())
-            await interaction.response.edit_message(embed=create_setup_embed(), view=SetupView())
-        except ValueError:
-            await interaction.response.send_message("❌ รูปแบบเวลาผิด", ephemeral=True, delete_after=5.0)
+            
+            # ถ้าเลือก Manual ให้เอาค่าจากช่องกรอก ถ้าเลือกจากเมนูให้เอาค่าที่ส่งมา
+            if self.date_input:
+                war_config["date"] = self.date_input.value.strip()
+            else:
+                war_config["date"] = self.selected_date
 
+            await send_log(interaction, "⚙️ แก้ไข Config", f"Title: {war_config['title']}\nDate: {war_config['date']}\nTime: {war_config['time']}", discord.Color.blue())
+            
+            # Update Setup Embed
+            await interaction.response.edit_message(content=None, embed=create_setup_embed(), view=SetupView())
+        except ValueError:
+            await interaction.response.send_message("❌ รูปแบบเวลาผิด (ใช้ HH:MM)", ephemeral=True, delete_after=5.0)
+
+class DateSelect(Select):
+    def __init__(self):
+        options = []
+        now = bangkok_now()
+
+        # 1. Manual Option (Moved to TOP)
+        options.append(discord.SelectOption(label="✏️ กรอกวันที่เอง...", value="manual", emoji="📝", description="พิมพ์วันที่เอง เช่น 25/12"))
+        
+        # 2. Today
+        options.append(discord.SelectOption(label=f"วันนี้ ({now.strftime('%d/%m')})", value="Today", emoji="🟢", description="เซ็ตเป็นวันปัจจุบัน"))
+        
+        # 3. Tomorrow
+        tmr = now + timedelta(days=1)
+        options.append(discord.SelectOption(label=f"พรุ่งนี้ ({tmr.strftime('%d/%m')})", value="Tomorrow", emoji="🟡", description="เซ็ตเป็นวันพรุ่งนี้"))
+        
+        # 4. Next 12 days
+        for i in range(2, 14):
+            d = now + timedelta(days=i)
+            day_name = d.strftime("%A") # Monday, Tuesday...
+            date_str = d.strftime("%d/%m")
+            options.append(discord.SelectOption(label=f"{day_name} ที่ {date_str}", value=date_str, emoji="🗓️"))
+            
+        super().__init__(placeholder="📅 เลือกวันที่จัด War...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        selected = self.values[0]
+        if selected == "manual":
+            # Show modal WITH date input
+            await interaction.response.send_modal(ConfigModal(selected, needs_date_input=True))
+        else:
+            # Show modal WITHOUT date input (Date locked)
+            await interaction.response.send_modal(ConfigModal(selected, needs_date_input=False))
+
+class DatePickerView(View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.add_item(DateSelect())
+
+# ==========================================
+# 🛠️ SETUP MENUS
+# ==========================================
 class AddTeamModal(Modal, title='เพิ่มทีมใหม่'):
     team_name = TextInput(label='ชื่อทีมใหม่', placeholder='เช่น Team Roaming', required=True)
     async def on_submit(self, interaction: discord.Interaction):
@@ -176,15 +231,20 @@ class RemoveTeamModal(Modal, title='ลบทีมล่าสุด'):
 class SetupView(View):
     def __init__(self):
         super().__init__(timeout=None)
-    @discord.ui.button(label="📝 แก้ไข Title/Time", style=discord.ButtonStyle.primary, row=1)
+    
+    @discord.ui.button(label="📅 เลือกวัน/เวลา/หัวข้อ", style=discord.ButtonStyle.primary, row=1)
     async def edit_config(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_modal(EditConfigModal())
+        # Step 1: Send Date Picker
+        await interaction.response.send_message("👇 **กรุณาเลือกวันที่ต้องการจัด War:**", view=DatePickerView(), ephemeral=True)
+
     @discord.ui.button(label="➕ เพิ่มทีม", style=discord.ButtonStyle.secondary, row=1)
     async def add_team(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(AddTeamModal())
+
     @discord.ui.button(label="➖ ลบทีมล่าสุด", style=discord.ButtonStyle.secondary, row=1)
     async def remove_team(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(RemoveTeamModal())
+
     @discord.ui.button(label="✅ ยืนยันและประกาศ", style=discord.ButtonStyle.green, row=2)
     async def confirm(self, interaction: discord.Interaction, button: Button):
         war_config["ALERT_CHANNEL_ID"] = interaction.channel_id
@@ -199,7 +259,8 @@ class SetupView(View):
 def create_setup_embed():
     embed = discord.Embed(title="🛠️ ตั้งค่าระบบ (Dynamic Config)", description="ปรับแต่งข้อมูลก่อนประกาศ", color=0x3498db)
     embed.add_field(name="📅 หัวข้อ", value=war_config["title"], inline=False)
-    embed.add_field(name="⏰ เวลา", value=f"{war_config['time']}", inline=False)
+    embed.add_field(name="🗓️ วันที่", value=war_config["date"], inline=True)
+    embed.add_field(name="⏰ เวลา", value=f"{war_config['time']} น.", inline=True)
     team_list = "\n".join([f"{i+1}. {t}" for i, t in enumerate(war_config["teams"])])
     embed.add_field(name=f"🛡️ ทีมทั้งหมด ({len(war_config['teams'])})", value=f"```\n{team_list}\n```", inline=False)
     return embed
@@ -299,7 +360,7 @@ class MainWarView(View):
     @discord.ui.button(label="📋 Copy", style=discord.ButtonStyle.secondary, row=2)
     async def copy_text(self, interaction: discord.Interaction, button: Button):
         data = db_get_all()
-        text = f"⚔️ **{war_config['title']}**\n⏰ {war_config['time']}\n\n"
+        text = f"⚔️ **{war_config['title']}**\n📅 {war_config['date']} ⏰ {war_config['time']}\n\n"
         team_map = {name: [] for name in war_config["teams"]}
         absence_list = []
         for username, team, role, time in data:
@@ -318,23 +379,17 @@ class MainWarView(View):
         await interaction.message.edit(embed=create_dashboard_embed())
         await interaction.response.send_message(f"✅ Status: {'LOCKED' if is_roster_locked else 'OPEN'}", ephemeral=True, delete_after=3.0)
 
-    # ปุ่มใหม่: จบวอและบันทึกสถิติ
     @discord.ui.button(label="💾 จบวอ/บันทึก", style=discord.ButtonStyle.success, row=3)
     async def save_history(self, interaction: discord.Interaction, button: Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("⛔ Admin Only", ephemeral=True)
             return
             
-        # บันทึกประวัติ (ใช้เวลาไทย)
         today = bangkok_now().strftime('%Y-%m-%d')
         count = db_save_history(today)
-        
-        # ล้างข้อมูลรายชื่อ
         db_clear()
         
         await send_log(interaction, "💾 บันทึกประวัติ", f"บันทึกข้อมูล {count} คน และล้างตาราง", discord.Color.green())
-        
-        # อัปเดตตารางให้ว่างเปล่า
         await interaction.message.edit(embed=create_dashboard_embed())
         await interaction.response.send_message(f"✅ **บันทึกสถิติ {count} คน เรียบร้อยแล้ว!**\n(ตารางถูกรีเซ็ตพร้อมสำหรับวอรอบหน้า)", ephemeral=True)
 
@@ -358,19 +413,36 @@ def create_dashboard_embed():
             role_emoji = "⚔️" if "DPS" in role else "🛡️" if "Tank" in role else "🌿"
             roster[team].append(f"> {role_emoji} **{username}** 🕒 `{time_text}`")
 
+    # --- 🕒 ADVANCED DATE PARSING ---
     try:
-        # คำนวณ Timestamp โดยใช้ Timezone ไทย
-        war_time_obj = datetime.strptime(war_config['time'], "%H:%M")
         tz = pytz.timezone('Asia/Bangkok')
         now_th = datetime.now(tz)
+        war_time_obj = datetime.strptime(war_config['time'], "%H:%M")
         
-        # สร้าง datetime แบบ aware (มี timezone)
-        target_dt = tz.localize(datetime(now_th.year, now_th.month, now_th.day, war_time_obj.hour, war_time_obj.minute))
-        
+        date_input = war_config.get('date', 'Today').lower().strip()
+        target_date = now_th.date() # Default
+
+        if date_input in ['tomorrow', 'พรุ่งนี้']:
+            target_date = now_th.date() + timedelta(days=1)
+        elif date_input not in ['today', 'วันนี้']:
+            # Try parsing DD/MM or DD-MM
+            clean_date = date_input.replace('-', '/')
+            try:
+                parsed_date = datetime.strptime(clean_date, "%d/%m")
+                target_date = parsed_date.replace(year=now_th.year).date()
+                if target_date < now_th.date() and (now_th.month == 12 and target_date.month == 1):
+                    target_date = target_date.replace(year=now_th.year + 1)
+            except:
+                pass 
+
+        target_dt = tz.localize(datetime.combine(target_date, war_time_obj.time()))
         ts = int(target_dt.timestamp())
-        time_display = f"<t:{ts}:F> • <t:{ts}:R>" 
-    except:
-        time_display = war_config['time']
+        
+        date_pretty = target_dt.strftime("%A, %d/%m")
+        time_display = f"📅 **{date_pretty}**\n<t:{ts}:F> • <t:{ts}:R>" 
+    except Exception as e:
+        time_display = f"{war_config['date']} - {war_config['time']}"
+    # --------------------------------
 
     lock_text = "🔒 SYSTEM LOCKED" if is_roster_locked else "🟢 OPEN REGISTRATION"
     color = 0xff2e4c if is_roster_locked else 0x00f7ff
@@ -399,7 +471,6 @@ def create_dashboard_embed():
         embed.add_field(name="▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", value=f"🏳️ **Absence List ({stats['Absence']})**", inline=False)
         embed.add_field(name="\u200b", value="\n".join(roster["Absence"]), inline=False)
         
-    # ใช้ bangkok_now() สำหรับเวลา Last Updated
     embed.set_footer(text=f"STATUS: {lock_text} | Last Updated: {bangkok_now().strftime('%H:%M:%S')}")
     return embed
 
@@ -441,7 +512,6 @@ async def check_missing(interaction: discord.Interaction, target_role: discord.R
     if not missing: await interaction.response.send_message("✅ ครบ!", ephemeral=True)
     else: await interaction.response.send_message(f"📢 **ขาด:** {', '.join(missing)}", ephemeral=True)
 
-# คำสั่งใหม่: ดูอันดับคนขยัน
 @bot.tree.command(name="leaderboard", description="ดูอันดับการเข้าวอ")
 async def leaderboard(interaction: discord.Interaction):
     data = db_get_leaderboard()
