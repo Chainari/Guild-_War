@@ -1,3 +1,5 @@
+import os
+from dotenv import load_dotenv
 import discord
 from discord.ext import commands, tasks
 from discord.ui import Button, View, Select, Modal, TextInput
@@ -9,7 +11,6 @@ from datetime import datetime
 # ==========================================
 # ⚙️ CONFIGURATION
 # ==========================================
-TOKEN = 'MTQ3MTU1NDk3OTUzMjc2NzQ3OQ.GHIGLy.CSBvIA0wAeoLHDqfo7p8NU5oNGmnSTKmZ0fRw0'
 DB_NAME = "guildwar_ultimate.db"
 LOG_CHANNEL_ID = 1471767919112486912
 
@@ -448,4 +449,4 @@ async def shutdown(interaction: discord.Interaction):
     await interaction.response.send_message("👋 Bye", ephemeral=True)
     await bot.close()
 
-bot.run(TOKEN)
+bot.run(os.getenv('DISCORD_TOKEN'))
