@@ -19,7 +19,7 @@ DB_NAME = "guildwar_ultimate.db"
 
 # 👇👇👇 ใส่เลขห้องตรงนี้ครับ 👇👇👇
 LOG_CHANNEL_ID = 1472149965299253457     # ห้อง Log (แอดมินดู)
-HISTORY_CHANNEL_ID = 1472148692969455771 # ห้อง History (เก็บประวัติย้อนหลัง)
+HISTORY_CHANNEL_ID = 1472149894096621639 # ห้อง History (เก็บประวัติย้อนหลัง)
 # 👆👆👆 ------------------- 👆👆👆
 
 war_config = {
@@ -117,14 +117,16 @@ def db_get_leaderboard():
 # ==========================================
 async def send_log(interaction: discord.Interaction, action_name: str, details: str, color: discord.Color):
     if LOG_CHANNEL_ID == 0: return
-    channel = interaction.client.get_channel(LOG_CHANNEL_ID)
-    if channel:
-        embed = discord.Embed(title=f"📝 บันทึกกิจกรรม: {action_name}", color=color, timestamp=bangkok_now())
-        embed.add_field(name="User", value=f"{interaction.user.display_name} ({interaction.user.name})", inline=True)
-        embed.add_field(name="Details", value=details, inline=False)
-        if interaction.user.avatar:
-            embed.set_thumbnail(url=interaction.user.avatar.url)
-        await channel.send(embed=embed)
+    try:
+        channel = await interaction.client.fetch_channel(LOG_CHANNEL_ID)
+        if channel:
+            embed = discord.Embed(title=f"📝 บันทึกกิจกรรม: {action_name}", color=color, timestamp=bangkok_now())
+            embed.add_field(name="User", value=f"{interaction.user.display_name} ({interaction.user.name})", inline=True)
+            embed.add_field(name="Details", value=details, inline=False)
+            if interaction.user.avatar:
+                embed.set_thumbnail(url=interaction.user.avatar.url)
+            await channel.send(embed=embed)
+    except: pass
 
 # ==========================================
 # 🗓️ DATE PICKER SYSTEM
@@ -316,7 +318,6 @@ class StatusSelect(Select):
             discord.SelectOption(label="✏️ อื่นๆ / ระบุเอง (Other)", description="พิมพ์บอกช่วงเวลาเอง...", value="Other", emoji="✏️")
         ])
 
-        # [แก้ไข] ปรับ max_values ให้เลือกได้หลายข้อ (เท่ากับจำนวนตัวเลือกทั้งหมด)
         super().__init__(placeholder="เลือกสถานะ (เลือกได้หลายข้อ)...", min_values=1, max_values=len(options), options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -324,12 +325,10 @@ class StatusSelect(Select):
             await interaction.response.send_message("⛔ **ระบบปิดรับรายชื่อแล้ว**", ephemeral=True, delete_after=5.0)
             return
             
-        # ถ้าเลือก "Other" รวมมาด้วย ให้เด้ง Modal (เพราะต้องพิมพ์เอง)
         if "Other" in self.values:
             await interaction.response.send_modal(CustomStatusModal(self.team, self.role, self.dashboard_msg))
             return
 
-        # [แก้ไข] เอาค่าที่เลือกทั้งหมดมารวมกันเป็น String (คั่นด้วยคอมม่า)
         selected_text = ", ".join(self.values)
 
         db_upsert(interaction.user.id, interaction.user.display_name, self.team, self.role, selected_text)
@@ -431,34 +430,46 @@ class MainWarView(View):
             await interaction.response.send_message("⛔ Admin Only", ephemeral=True)
             return
             
+        # Defer การตอบกลับไว้ก่อน เพราะการส่งไปห้องอื่นอาจใช้เวลา
+        await interaction.response.defer(ephemeral=True) 
+
         today = bangkok_now().strftime('%Y-%m-%d')
         count = db_save_history(today)
         
-        # [NEW] ส่งประวัติไปห้อง History Channel
+        # [UPDATE] ส่งประวัติไปห้อง History Channel (แบบ Force Fetch)
         if HISTORY_CHANNEL_ID:
-            history_channel = interaction.client.get_channel(HISTORY_CHANNEL_ID)
-            if history_channel:
+            try:
+                # ใช้ fetch_channel แทน get_channel เพื่อบังคับหาห้อง
+                history_channel = await interaction.client.fetch_channel(HISTORY_CHANNEL_ID)
+                
                 embed = create_dashboard_embed()
                 embed.title = f"📜 สรุปยอดวอ วันที่ {today}"
                 embed.color = discord.Color.greyple()
                 embed.description = f"จบวอเรียบร้อย สมาชิกเข้าร่วม: {count} คน"
+                # เปลี่ยน Footer ให้ดูเป็นบันทึกประวัติ ไม่ใช่สถานะห้อง
+                embed.set_footer(text=f"Saved by {interaction.user.display_name} • {bangkok_now().strftime('%H:%M:%S')}")
+                
                 await history_channel.send(embed=embed)
+            except Exception as e:
+                print(f"❌ Error sending history: {e}")
+                await interaction.followup.send(f"⚠️ บันทึกข้อมูลแล้ว แต่ส่งเข้าห้อง History ไม่ได้ (เช็คเลขห้อง/ยศบอท): {e}", ephemeral=True)
         
-        # [แก้ไข] เปลี่ยนหน้าจอประกาศเดิมให้เป็น "จบการทำงาน" (Type B Style)
-        embed = interaction.message.embeds[0]
-        embed.title = f"🔴 จบวอแล้ว: {war_config['title']}"
-        embed.color = 0x2f3136 # สีเทาเข้ม
-        embed.clear_fields() # ลบรายชื่อออกให้หมด
-        embed.description = f"✅ **บันทึกข้อมูลเรียบร้อย**\n📅 วันที่: {today}\n👥 จำนวนคน: {count} คน"
-        embed.set_footer(text="System Closed.")
-        
-        # ลบปุ่มออกให้หมด เพื่อไม่ให้กดเล่นต่อได้
-        await interaction.message.edit(embed=embed, view=None)
+        # [แก้ไข] เปลี่ยนหน้าจอประกาศเดิมให้เป็น "จบการทำงาน"
+        try:
+            embed = interaction.message.embeds[0]
+            embed.title = f"🔴 จบวอแล้ว: {war_config['title']}"
+            embed.color = 0x2f3136 # สีเทาเข้ม
+            embed.clear_fields() 
+            embed.description = f"✅ **บันทึกข้อมูลเรียบร้อย**\n📅 วันที่: {today}\n👥 จำนวนคน: {count} คน"
+            embed.set_footer(text="System Closed.")
+            await interaction.message.edit(embed=embed, view=None)
+        except:
+            pass # กัน error กรณีข้อความถูกลบไปก่อน
         
         db_clear()
         
         await send_log(interaction, "💾 บันทึกประวัติ", f"บันทึกข้อมูล {count} คน และปิดประกาศ", discord.Color.green())
-        await interaction.response.send_message(f"✅ **ปิดจบคอร์สเรียบร้อย!**", ephemeral=True)
+        await interaction.followup.send(f"✅ **ปิดจบคอร์สเรียบร้อย!**\n(ส่งสรุปไปห้อง <#{HISTORY_CHANNEL_ID}> แล้ว)", ephemeral=True)
 
 # ==========================================
 # 📊 DASHBOARD
@@ -481,7 +492,34 @@ def create_dashboard_embed():
             
             role_emoji = "⚔️" if "DPS" in role else "🛡️" if "Tank" in role else "🌿"
             
-            display_str = f"> {role_emoji} **{username}** `[{time_text}]`"
+            # --- START NEW LOGIC: สร้างหลอดพลัง 8 ช่อง ---
+            status_display = ""
+            
+            # กรณี Full Time (เขียว 8 เม็ด)
+            if "Full Time" in time_text:
+                status_display = "🟢"*8
+            
+            # กรณีเลือกเป็นรอบๆ (Round 1-8)
+            elif "Round" in time_text:
+                bar = []
+                for i in range(1, 9): # วนลูป 1 ถึง 8
+                    if f"Round {i}" in time_text:
+                        bar.append("🟢") # ถ้าเลือก: เขียว
+                    else:
+                        bar.append("⚫") # ถ้าไม่เลือก: ดำ
+                status_display = "".join(bar)
+            
+            # กรณีอื่นๆ (เช่น พิมพ์เอง Custom) ให้แสดงข้อความเดิม
+            else:
+                status_display = f"`[{time_text}]`"
+
+            # เติมพวก Late Join หรืออื่นๆ ต่อท้ายหลอด
+            if "Late Join" in time_text and "Round" in time_text:
+                status_display += " 🐢"
+            
+            # [แสดงผล] ย้ายหลอดไปไว้หลังชื่อตาม Request
+            display_str = f"> {role_emoji} **{username}** {status_display}"
+            # --- END NEW LOGIC ---
             
             if "Standby" in time_text:
                 roster[team]["Standby"].append(f"💤 {username} [Standby]")
