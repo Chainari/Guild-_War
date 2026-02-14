@@ -15,18 +15,20 @@ def bangkok_now():
 # ==========================================
 # ⚙️ CONFIGURATION
 # ==========================================
-DB_NAME = "guildwar_ultimate.db"
+DB_NAME = "guildwar_ultimate_v3.db"
 
-# 👇👇👇 ใส่เลขห้องตรงนี้ครับ 👇👇👇
-LOG_CHANNEL_ID = 1471767919112486912     # ห้อง Log (แอดมินดู)
-HISTORY_CHANNEL_ID = 1472117530721128679 # ห้อง History (เก็บประวัติย้อนหลัง)
-# 👆👆👆 ------------------- 👆👆👆
+# 👇👇👇 ใส่เลขห้องเหมือนเดิมครับ 👇👇👇
+LOG_CHANNEL_ID = 1471767919112486912
+HISTORY_CHANNEL_ID = 1472117530721128679
+# 👆👆👆 --------------------------- 👆👆👆
 
+# ค่าเริ่มต้น
 war_config = {
     "title": "Guild War Roster",
     "date": "Today",
-    "time": "19:30",
-    "teams": ["Team ATK", "Team Flex"],
+    "match_time": "20:00",    # เวลาแข่งจริง
+    "deadline_time": "19:30", # เวลาปิดรับลงชื่อ
+    "teams": ["Team Red", "Team Blue"],
     "ALERT_CHANNEL_ID": None
 }
 
@@ -69,6 +71,14 @@ def db_remove(user_id):
     conn.commit()
     conn.close()
 
+def db_get_user(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT team, role, time_text FROM registrations WHERE user_id=?", (user_id,))
+    data = c.fetchone()
+    conn.close()
+    return data
+
 def db_get_all():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -99,446 +109,332 @@ def db_save_history(date_str):
     conn.close()
     return count
 
-def db_get_leaderboard():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''SELECT username, COUNT(*) as count
-                FROM history
-                WHERE status = 'Joined'
-                GROUP BY user_id
-                ORDER BY count DESC
-                LIMIT 10''')
-    data = c.fetchall()
-    conn.close()
-    return data
-
-# ==========================================
-# 📝 AUDIT LOGS
-# ==========================================
 async def send_log(interaction: discord.Interaction, action_name: str, details: str, color: discord.Color):
     if LOG_CHANNEL_ID == 0: return
     channel = interaction.client.get_channel(LOG_CHANNEL_ID)
     if channel:
-        embed = discord.Embed(title=f"📝 บันทึกกิจกรรม: {action_name}", color=color, timestamp=bangkok_now())
-        embed.add_field(name="User", value=f"{interaction.user.display_name} ({interaction.user.name})", inline=True)
+        embed = discord.Embed(title=f"📝 Log: {action_name}", color=color, timestamp=bangkok_now())
+        embed.add_field(name="User", value=f"{interaction.user.display_name}", inline=True)
         embed.add_field(name="Details", value=details, inline=False)
-        if interaction.user.avatar:
-            embed.set_thumbnail(url=interaction.user.avatar.url)
         await channel.send(embed=embed)
 
 # ==========================================
-# 🗓️ DATE PICKER SYSTEM
+# 🛠️ ADMIN CONFIG SYSTEM (POPUP)
 # ==========================================
-class ConfigModal(Modal, title='ตั้งค่า War'):
-    def __init__(self, selected_date, needs_date_input=False):
+class MasterConfigModal(Modal, title='ตั้งค่ารายละเอียด War'):
+    def __init__(self):
         super().__init__()
-        self.selected_date = selected_date
         
-        self.title_input = TextInput(label='หัวข้อ (Title)', default=war_config["title"], required=True)
-        self.add_item(self.title_input)
-        
-        if needs_date_input:
-            self.date_input = TextInput(label='วันที่ (DD/MM)', placeholder="เช่น 25/12", required=True)
-            self.add_item(self.date_input)
-        else:
-            self.date_input = None
+        # 1. หัวข้อ
+        self.title_input = TextInput(
+            label='1. หัวข้อ (Title)',
+            default=war_config["title"],
+            required=True
+        )
+        # 2. วันที่
+        self.date_input = TextInput(
+            label='2. วันที่ (DD/MM หรือ Today)',
+            default=war_config["date"],
+            required=True
+        )
+        # 3. เวลาแข่ง
+        self.match_time_input = TextInput(
+            label='3. เวลาเริ่มแข่ง (HH:MM)',
+            default=war_config["match_time"],
+            placeholder="20:00",
+            required=True,
+            max_length=5
+        )
+        # 4. เวลาปิดรับ (Deadline)
+        self.deadline_input = TextInput(
+            label='4. เวลาปิดรับลงชื่อ (HH:MM)',
+            default=war_config["deadline_time"],
+            placeholder="19:30",
+            required=True,
+            max_length=5
+        )
 
-        self.time_input = TextInput(label='เวลาเริ่ม (HH:MM)', default=war_config["time"], placeholder="Ex. 19:30", required=True, max_length=5)
-        self.add_item(self.time_input)
+        self.add_item(self.title_input)
+        self.add_item(self.date_input)
+        self.add_item(self.match_time_input)
+        self.add_item(self.deadline_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            datetime.strptime(self.time_input.value, "%H:%M")
+            # เช็ครูปแบบเวลา
+            datetime.strptime(self.match_time_input.value, "%H:%M")
+            datetime.strptime(self.deadline_input.value, "%H:%M")
+            
+            # บันทึกค่า
             war_config["title"] = self.title_input.value
-            war_config["time"] = self.time_input.value
-            if self.date_input:
-                war_config["date"] = self.date_input.value.strip()
-            else:
-                war_config["date"] = self.selected_date
+            war_config["date"] = self.date_input.value
+            war_config["match_time"] = self.match_time_input.value
+            war_config["deadline_time"] = self.deadline_input.value
 
-            await send_log(interaction, "⚙️ แก้ไข Config", f"Title: {war_config['title']}\nDate: {war_config['date']}\nTime: {war_config['time']}", discord.Color.blue())
+            await send_log(interaction, "⚙️ แก้ไข Config", 
+                        f"Title: {war_config['title']}\nTime: {war_config['match_time']}\nDeadline: {war_config['deadline_time']}", 
+                        discord.Color.blue())
+            
+            # อัปเดตหน้า Setup
             await interaction.response.edit_message(content=None, embed=create_setup_embed(), view=SetupView())
+        
         except ValueError:
-            await interaction.response.send_message("❌ รูปแบบเวลาผิด (ใช้ HH:MM)", ephemeral=True, delete_after=5.0)
-
-class DateSelect(Select):
-    def __init__(self):
-        options = []
-        now = bangkok_now()
-        options.append(discord.SelectOption(label="✏️ กรอกวันที่เอง...", value="manual", emoji="📝", description="พิมพ์วันที่เอง เช่น 25/12"))
-        options.append(discord.SelectOption(label=f"วันนี้ ({now.strftime('%d/%m')})", value="Today", emoji="🟢", description="เซ็ตเป็นวันปัจจุบัน"))
-        tmr = now + timedelta(days=1)
-        options.append(discord.SelectOption(label=f"พรุ่งนี้ ({tmr.strftime('%d/%m')})", value="Tomorrow", emoji="🟡", description="เซ็ตเป็นวันพรุ่งนี้"))
-        for i in range(2, 14):
-            d = now + timedelta(days=i)
-            day_name = d.strftime("%A")
-            date_str = d.strftime("%d/%m")
-            options.append(discord.SelectOption(label=f"{day_name} ที่ {date_str}", value=date_str, emoji="🗓️"))
-        super().__init__(placeholder="📅 เลือกวันที่จัด War...", min_values=1, max_values=1, options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        selected = self.values[0]
-        if selected == "manual":
-            await interaction.response.send_modal(ConfigModal(selected, needs_date_input=True))
-        else:
-            await interaction.response.send_modal(ConfigModal(selected, needs_date_input=False))
-
-class DatePickerView(View):
-    def __init__(self):
-        super().__init__(timeout=60)
-        self.add_item(DateSelect())
+            await interaction.response.send_message("❌ รูปแบบเวลาผิด (ต้องใช้ HH:MM เช่น 20:00)", ephemeral=True, delete_after=5.0)
 
 # ==========================================
-# 🛠️ SETUP MENUS
+# 🛡️ USER REGISTRATION (POPUP)
+# ==========================================
+class OneStopRegistrationView(View):
+    def __init__(self, default_team=None, default_role=None, default_status=None, dashboard_msg=None):
+        super().__init__(timeout=180)
+        self.dashboard_msg = dashboard_msg
+        self.selected_team = default_team
+        self.selected_role = default_role
+        self.selected_status = default_status
+
+        # เลือกทีม
+        team_options = [discord.SelectOption(label=t, value=t, default=(t==default_team)) for t in war_config["teams"]]
+        self.team_select = Select(placeholder="1️⃣ เลือกทีม...", options=team_options, row=0)
+        self.team_select.callback = self.on_team_change
+        self.add_item(self.team_select)
+
+        # เลือกตำแหน่ง
+        role_options = [
+            discord.SelectOption(label="Main DPS", value="DPS", emoji="⚔️", default=("DPS"==default_role)),
+            discord.SelectOption(label="Tank", value="Tank", emoji="🛡️", default=("Tank"==default_role)),
+            discord.SelectOption(label="Healer", value="Heal", emoji="🌿", default=("Heal"==default_role))
+        ]
+        self.role_select = Select(placeholder="2️⃣ เลือกตำแหน่ง...", options=role_options, row=1)
+        self.role_select.callback = self.on_role_change
+        self.add_item(self.role_select)
+
+        # เลือกเวลา
+        status_options = [
+            discord.SelectOption(label="อยู่ยาว (Full Time)", value="Full Time", emoji="🔥"),
+            discord.SelectOption(label="ขอ 1 รอบ (1 Round)", value="1 Round", emoji="☝️"),
+            discord.SelectOption(label="ไปสาย (Late)", value="Late Join", emoji="🐢"),
+            discord.SelectOption(label="สำรอง (Standby)", value="Standby", emoji="💤"),
+            discord.SelectOption(label="อื่นๆ (ระบุเอง)", value="Other", emoji="✏️")
+        ]
+        # Pre-select logic
+        found = False
+        for opt in status_options:
+            if opt.value == default_status:
+                opt.default = True; found = True
+        if not found and default_status: # ถ้าเป็นค่า Custom ให้เลือก Other ไว้ก่อน
+            status_options[-1].default = True
+
+        self.status_select = Select(placeholder="3️⃣ ความพร้อม/เวลา...", options=status_options, row=2)
+        self.status_select.callback = self.on_status_change
+        self.add_item(self.status_select)
+
+    async def on_team_change(self, interaction: discord.Interaction):
+        self.selected_team = self.team_select.values[0]
+        await interaction.response.defer()
+
+    async def on_role_change(self, interaction: discord.Interaction):
+        self.selected_role = self.role_select.values[0]
+        await interaction.response.defer()
+
+    async def on_status_change(self, interaction: discord.Interaction):
+        val = self.status_select.values[0]
+        if val == "Other":
+            await interaction.response.send_modal(CustomStatusModal(self))
+        else:
+            self.selected_status = val
+            await interaction.response.defer()
+
+    @discord.ui.button(label="💾 ยืนยัน (Confirm)", style=discord.ButtonStyle.green, row=3)
+    async def confirm_btn(self, interaction: discord.Interaction, button: Button):
+        if not self.selected_team or not self.selected_role or not self.selected_status:
+            await interaction.response.send_message("❌ เลือกให้ครบ 3 ช่องก่อนครับ", ephemeral=True); return
+
+        db_upsert(interaction.user.id, interaction.user.display_name, self.selected_team, self.selected_role, self.selected_status)
+        await send_log(interaction, "✅ ลงทะเบียน", f"{self.selected_team} | {self.selected_role}", discord.Color.green())
+        
+        if self.dashboard_msg:
+            try: await self.dashboard_msg.edit(embed=create_dashboard_embed())
+            except: pass
+
+        await interaction.response.edit_message(content=f"✅ **บันทึกสำเร็จ!**\n🛡️ {self.selected_team} | ⚔️ {self.selected_role}", view=None, embed=None)
+
+class CustomStatusModal(Modal, title='ระบุเวลา'):
+    def __init__(self, parent_view):
+        super().__init__()
+        self.parent_view = parent_view
+        self.custom_input = TextInput(label="รายละเอียด", placeholder="เช่น เข้า 20:30", required=True)
+        self.add_item(self.custom_input)
+    async def on_submit(self, interaction: discord.Interaction):
+        self.parent_view.selected_status = self.custom_input.value
+        await interaction.response.defer()
+
+# ==========================================
+# 🛠️ SETUP & MAIN VIEW
 # ==========================================
 class AddTeamModal(Modal, title='เพิ่มทีมใหม่'):
-    team_name = TextInput(label='ชื่อทีมใหม่', placeholder='เช่น Team Roaming', required=True)
+    team_name = TextInput(label='ชื่อทีม', placeholder='เช่น Team Charlie', required=True)
     async def on_submit(self, interaction: discord.Interaction):
-        new_team = self.team_name.value
-        if new_team not in war_config["teams"]:
-            war_config["teams"].append(new_team)
-            await send_log(interaction, "➕ เพิ่มทีม", f"เพิ่มทีม: {new_team}", discord.Color.green())
+        if self.team_name.value not in war_config["teams"]:
+            war_config["teams"].append(self.team_name.value)
             await interaction.response.edit_message(embed=create_setup_embed(), view=SetupView())
-        else:
-            await interaction.response.send_message("❌ ชื่อทีมซ้ำ", ephemeral=True, delete_after=3.0)
+        else: await interaction.response.send_message("❌ ทีมซ้ำ", ephemeral=True)
 
 class RemoveTeamModal(Modal, title='ลบทีมล่าสุด'):
     confirm = TextInput(label='พิมพ์ CONFIRM', placeholder='CONFIRM', required=True)
     async def on_submit(self, interaction: discord.Interaction):
-        if self.confirm.value == "CONFIRM":
-            if len(war_config["teams"]) > 1:
-                removed = war_config["teams"].pop()
-                await send_log(interaction, "➖ ลบทีม", f"ลบทีม: {removed}", discord.Color.red())
-                await interaction.response.edit_message(embed=create_setup_embed(), view=SetupView())
-            else: await interaction.response.send_message("❌ ต้องเหลืออย่างน้อย 1 ทีม", ephemeral=True, delete_after=3.0)
-        else: await interaction.response.send_message("❌ ยืนยันไม่ถูกต้อง", ephemeral=True, delete_after=3.0)
+        if self.confirm.value == "CONFIRM" and len(war_config["teams"]) > 1:
+            war_config["teams"].pop()
+            await interaction.response.edit_message(embed=create_setup_embed(), view=SetupView())
+        else: await interaction.response.send_message("❌ ผิดพลาด", ephemeral=True)
 
 class SetupView(View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label="📅 เลือกวัน/เวลา/หัวข้อ", style=discord.ButtonStyle.primary, row=1)
+    # 👇👇 ปุ่มนี้คือที่คุณต้องการครับ 👇👇
+    @discord.ui.button(label="📅 เลือกวัน / เวลา / หัวข้อ", style=discord.ButtonStyle.primary, row=1)
     async def edit_config(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_message("👇 **กรุณาเลือกวันที่ต้องการจัด War:**", view=DatePickerView(), ephemeral=True)
+        # พอกดปุ๊บ เด้ง Popup ทันที
+        await interaction.response.send_modal(MasterConfigModal())
 
     @discord.ui.button(label="➕ เพิ่มทีม", style=discord.ButtonStyle.secondary, row=1)
     async def add_team(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(AddTeamModal())
 
-    @discord.ui.button(label="➖ ลบทีมล่าสุด", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="➖ ลบทีม", style=discord.ButtonStyle.secondary, row=1)
     async def remove_team(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(RemoveTeamModal())
 
-    @discord.ui.button(label="🗑️ ล้างรายชื่อเก่า (Reset)", style=discord.ButtonStyle.danger, row=2)
+    @discord.ui.button(label="🗑️ Reset รายชื่อ", style=discord.ButtonStyle.danger, row=2)
     async def clear_roster(self, interaction: discord.Interaction, button: Button):
         db_clear()
-        await send_log(interaction, "🗑️ ล้างรายชื่อ (Manual Reset)", "Admin กดล้างรายชื่อก่อนเริ่มวอ", discord.Color.red())
-        await interaction.response.send_message("✅ **ล้างรายชื่อเก่าเรียบร้อย!** พร้อมสำหรับการเริ่มประกาศใหม่", ephemeral=True)
+        await interaction.response.send_message("✅ ล้างรายชื่อเรียบร้อย", ephemeral=True)
 
     @discord.ui.button(label="✅ ยืนยันและประกาศ", style=discord.ButtonStyle.green, row=2)
     async def confirm(self, interaction: discord.Interaction, button: Button):
         war_config["ALERT_CHANNEL_ID"] = interaction.channel_id
         embed = create_dashboard_embed()
         view = MainWarView()
-        await send_log(interaction, "📢 ประกาศ War", f"Teams: {len(war_config['teams'])}", discord.Color.gold())
-        msg = await interaction.channel.send(embed=embed, view=view)
-        try: await msg.create_thread(name=f"💬 ห้องคุยงาน - {war_config['title']}", auto_archive_duration=1440)
-        except: pass
+        await interaction.channel.send(embed=embed, view=view)
         await interaction.response.edit_message(content="✅ **ประกาศเรียบร้อย!**", embed=None, view=None, delete_after=5.0)
 
 def create_setup_embed():
-    embed = discord.Embed(title="🛠️ ตั้งค่าระบบ (Dynamic Config)", description="ปรับแต่งข้อมูลก่อนประกาศ", color=0x3498db)
-    embed.add_field(name="📅 หัวข้อ", value=war_config["title"], inline=False)
-    embed.add_field(name="🗓️ วันที่", value=war_config["date"], inline=True)
-    embed.add_field(name="⏰ เวลา", value=f"{war_config['time']} น.", inline=True)
-    team_list = "\n".join([f"{i+1}. {t}" for i, t in enumerate(war_config["teams"])])
-    embed.add_field(name=f"🛡️ ทีมทั้งหมด ({len(war_config['teams'])})", value=f"```\n{team_list}\n```", inline=False)
-    embed.set_footer(text="💡 อย่าลืมกด 'ล้างรายชื่อเก่า' หากต้องการเริ่มนับจำนวนคนใหม่")
+    embed = discord.Embed(title="🛠️ ตั้งค่าระบบ War", color=0x3498db)
+    embed.add_field(name="1. หัวข้อ", value=war_config["title"], inline=False)
+    embed.add_field(name="2. วันที่", value=war_config["date"], inline=True)
+    embed.add_field(name="3. เวลาแข่ง", value=f"{war_config['match_time']} น.", inline=True)
+    embed.add_field(name="4. ปิดรับ (Deadline)", value=f"{war_config['deadline_time']} น.", inline=True) # แสดง Deadline ชัดเจน
+    embed.add_field(name="🛡️ ทีม", value=", ".join(war_config["teams"]), inline=False)
     return embed
 
 # ==========================================
-# 📝 REGISTRATION UI
+# 🎮 MAIN DASHBOARD
 # ==========================================
-class AbsenceModal(Modal, title='แบบฟอร์มแจ้งลา'):
-    def __init__(self, dashboard_msg):
-        super().__init__()
-        self.dashboard_msg = dashboard_msg 
-    reason = TextInput(label='เหตุผลที่ลา', placeholder='เช่น ติดงาน, ป่วย', required=True)
-    async def on_submit(self, interaction: discord.Interaction):
-        if is_roster_locked:
-            await interaction.response.send_message("⛔ **ระบบปิดรับรายชื่อแล้ว**", ephemeral=True, delete_after=5.0)
-            return
-        db_upsert(interaction.user.id, interaction.user.display_name, "Absence", self.reason.value, "-")
-        await send_log(interaction, "🏳️ แจ้งลา", f"Reason: {self.reason.value}", discord.Color.orange())
-        if self.dashboard_msg:
-            try: await self.dashboard_msg.edit(embed=create_dashboard_embed())
-            except: pass
-        await interaction.response.send_message(f"🏳️ บันทึกการลาเรียบร้อย", ephemeral=True, delete_after=5.0)
-
-# [NEW] Modal สำหรับกรอกสถานะเอง (Custom Input)
-class CustomStatusModal(Modal, title='ระบุสถานะของคุณ'):
-    def __init__(self, team, role, dashboard_msg):
-        super().__init__()
-        self.team = team
-        self.role = role
-        self.dashboard_msg = dashboard_msg
-        
-    status_input = TextInput(label='สถานะ / ช่วงเวลา', placeholder='เช่น เข้าหลัง 20.00 น.', required=True, max_length=20)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        status = self.status_input.value
-        db_upsert(interaction.user.id, interaction.user.display_name, self.team, self.role, status)
-        await send_log(interaction, "✅ ลงชื่อ (Custom)", f"Team: {self.team}\nRole: {self.role}\nStatus: {status}", discord.Color.green())
-        
-        if self.dashboard_msg:
-            try: await self.dashboard_msg.edit(embed=create_dashboard_embed())
-            except: pass
-        await interaction.response.send_message(f"✅ ลงทะเบียนสำเร็จ! **{self.team}** ({status})", ephemeral=True, delete_after=5.0)
-
-class StatusSelect(Select):
-    def __init__(self, team, role, dashboard_msg):
-        self.team = team
-        self.role = role
-        self.dashboard_msg = dashboard_msg
-        
-        options = [
-            discord.SelectOption(label="🔥 อยู่ยาว / Full Time", description="เริ่ม 19.30 ยันจบกี่โมงก็ช่าง", value="Full Time", emoji="🔥"),
-            discord.SelectOption(label="☝️ ขอรอบเดียว / 1 Round", description="เล่นรอบเดียวแล้วไปนอน/ทำงานต่อ", value="1 Round", emoji="☝️"),
-            discord.SelectOption(label="✌️ ไหว 2 รอบ / 2 Rounds", description="เผื่อเกมยืดเยื้อ", value="2 Rounds", emoji="✌️"),
-            discord.SelectOption(label="🤟 ไหว 3 รอบ / 3 Rounds", description="จัดไป 3 ตาจุกๆ", value="3 Rounds", emoji="🤟"),
-            discord.SelectOption(label="🐢 ตามไปทีหลัง / Late Join", description="มาไม่ทัน 19.30 แต่จะตามไป", value="Late Join", emoji="🐢"),
-            discord.SelectOption(label="💤 สแตนด์บาย / Standby", description="ตัวสำรอง ถ้าคนขาดค่อยเรียก", value="Standby", emoji="💤"),
-            discord.SelectOption(label="✏️ อื่นๆ / ระบุเอง (Other)", description="พิมพ์บอกช่วงเวลาเอง...", value="Other", emoji="✏️")
-        ]
-        super().__init__(placeholder="เลือกสถานะความพร้อมของคุณ...", min_values=1, max_values=1, options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        if is_roster_locked:
-            await interaction.response.send_message("⛔ **ระบบปิดรับรายชื่อแล้ว**", ephemeral=True, delete_after=5.0)
-            return
-            
-        selected_value = self.values[0]
-
-        # ถ้าเลือก Other ให้เด้ง Modal ให้พิมพ์
-        if selected_value == "Other":
-            await interaction.response.send_modal(CustomStatusModal(self.team, self.role, self.dashboard_msg))
-            return
-
-        # ถ้าเลือกแบบปกติ บันทึกเลย
-        db_upsert(interaction.user.id, interaction.user.display_name, self.team, self.role, selected_value)
-        await send_log(interaction, "✅ ลงชื่อ", f"Team: {self.team}\nRole: {self.role}\nStatus: {selected_value}", discord.Color.green())
-        
-        if self.dashboard_msg:
-            try: await self.dashboard_msg.edit(embed=create_dashboard_embed())
-            except: pass
-            
-        await interaction.response.send_message(f"✅ ลงทะเบียนสำเร็จ! **{self.team}** ({selected_value})", ephemeral=True, delete_after=5.0)
-
-class StatusSelectView(View):
-    def __init__(self, team, role, dashboard_msg):
-        super().__init__()
-        self.add_item(StatusSelect(team, role, dashboard_msg))
-
-class TeamSelect(Select):
-    def __init__(self, role, dashboard_msg):
-        self.role_value = role
-        self.dashboard_msg = dashboard_msg
-        options = []
-        for team_name in war_config["teams"]:
-            options.append(discord.SelectOption(label=team_name, value=team_name, emoji="🛡️"))
-        super().__init__(placeholder="เลือกทีมที่จะลง...", min_values=1, max_values=1, options=options)
-    
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message(
-            f"⏳ กรุณาระบุความพร้อมสำหรับ **{self.values[0]}**:",
-            view=StatusSelectView(self.values[0], self.role_value, self.dashboard_msg),
-            ephemeral=True
-        )
-
-class TeamSelectView(View):
-    def __init__(self, role, dashboard_msg):
-        super().__init__()
-        self.add_item(TeamSelect(role, dashboard_msg))
-
-class RoleSelect(Select):
-    def __init__(self):
-        super().__init__(placeholder="เลือกตำแหน่งของคุณ...", min_values=1, max_values=1, options=[
-            discord.SelectOption(label="Main DPS", value="DPS", emoji="⚔️"),
-            discord.SelectOption(label="Tank", value="Tank", emoji="🛡️"),
-            discord.SelectOption(label="Healer", value="Heal", emoji="🌿"),
-        ])
-    async def callback(self, interaction: discord.Interaction):
-        if is_roster_locked:
-            await interaction.response.send_message("⛔ **ระบบปิดรับรายชื่อแล้ว**", ephemeral=True, delete_after=5.0)
-            return
-        await interaction.response.send_message("👉 กรุณาเลือกทีม:", view=TeamSelectView(self.values[0], interaction.message), ephemeral=True)
-
 class MainWarView(View):
     def __init__(self):
         super().__init__(timeout=None)
-        self.add_item(RoleSelect())
 
-    @discord.ui.button(label="🔄 รีเฟรช", style=discord.ButtonStyle.blurple, row=2)
+    @discord.ui.button(label="📝 ลงทะเบียน / แก้ไข", style=discord.ButtonStyle.primary, row=0, emoji="✍️")
+    async def register_edit(self, interaction: discord.Interaction, button: Button):
+        if is_roster_locked:
+            await interaction.response.send_message("⛔ **ปิดรับลงชื่อแล้วครับ** (เลยเวลา Deadline)", ephemeral=True); return
+        
+        user_data = db_get_user(interaction.user.id)
+        d_team, d_role, d_status = user_data if user_data else (None, None, None)
+        
+        await interaction.response.send_message("👇 **กรอกข้อมูล**", view=OneStopRegistrationView(d_team, d_role, d_status, interaction.message), ephemeral=True)
+
+    @discord.ui.button(label="🏳️ แจ้งลา", style=discord.ButtonStyle.secondary, row=0)
+    async def absence(self, interaction: discord.Interaction, button: Button):
+        if is_roster_locked:
+            await interaction.response.send_message("⛔ ปิดระบบแล้ว", ephemeral=True); return
+        await interaction.response.send_modal(AbsenceModal(interaction.message))
+
+    @discord.ui.button(label="❌ ลบชื่อ", style=discord.ButtonStyle.red, row=0)
+    async def leave(self, interaction: discord.Interaction, button: Button):
+        db_remove(interaction.user.id)
+        await interaction.message.edit(embed=create_dashboard_embed())
+        await interaction.response.send_message("🗑️ ลบชื่อแล้ว", ephemeral=True, delete_after=3)
+
+    @discord.ui.button(label="🔄 Refresh", style=discord.ButtonStyle.gray, row=1)
     async def refresh(self, interaction: discord.Interaction, button: Button):
         await interaction.response.edit_message(embed=create_dashboard_embed(), view=self)
 
-    @discord.ui.button(label="🏳️ แจ้งลา", style=discord.ButtonStyle.gray, row=2)
-    async def absence(self, interaction: discord.Interaction, button: Button):
-        if is_roster_locked:
-            await interaction.response.send_message("⛔ **ระบบปิด**", ephemeral=True, delete_after=5.0)
-            return
-        await interaction.response.send_modal(AbsenceModal(interaction.message))
-
-    @discord.ui.button(label="❌ ลบชื่อ", style=discord.ButtonStyle.red, row=2)
-    async def leave(self, interaction: discord.Interaction, button: Button):
-        db_remove(interaction.user.id)
-        await send_log(interaction, "🗑️ ลบชื่อ", "User removed themselves.", discord.Color.red())
-        await interaction.message.edit(embed=create_dashboard_embed())
-        await interaction.response.send_message("🗑️ ลบรายชื่อเรียบร้อย", ephemeral=True, delete_after=5.0)
-
-    @discord.ui.button(label="📋 Copy", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="📋 Copy", style=discord.ButtonStyle.gray, row=1)
     async def copy_text(self, interaction: discord.Interaction, button: Button):
-        data = db_get_all()
-        text = f"⚔️ **{war_config['title']}**\n📅 {war_config['date']} ⏰ {war_config['time']}\n\n"
-        team_map = {name: [] for name in war_config["teams"]}
-        absence_list = []
-        for username, team, role, time in data:
-            if team == "Absence": absence_list.append(f"- {username} ({role})")
-            elif team in team_map: team_map[team].append(f"- {username} ({role})")
-        for team_name in war_config["teams"]:
-            text += f"🛡️ **{team_name}**\n" + ("\n".join(team_map[team_name]) if team_map[team_name] else "- ว่าง -") + "\n\n"
-        text += "🏳️ **แจ้งลา**\n" + ("\n".join(absence_list) if absence_list else "- ไม่มี -")
+        text = generate_copy_text()
         await interaction.response.send_message(f"```{text}```", ephemeral=True)
 
-    @discord.ui.button(label="🔒 Lock", style=discord.ButtonStyle.danger, row=3)
+    @discord.ui.button(label="🔐 Lock/Unlock", style=discord.ButtonStyle.danger, row=2)
     async def toggle_lock(self, interaction: discord.Interaction, button: Button):
         if not interaction.user.guild_permissions.administrator: return
         global is_roster_locked
         is_roster_locked = not is_roster_locked
         await interaction.message.edit(embed=create_dashboard_embed())
-        await interaction.response.send_message(f"✅ Status: {'LOCKED' if is_roster_locked else 'OPEN'}", ephemeral=True, delete_after=3.0)
+        await interaction.response.send_message(f"Status: {'LOCKED' if is_roster_locked else 'OPEN'}", ephemeral=True, delete_after=3)
 
-    @discord.ui.button(label="💾 จบวอ/บันทึก", style=discord.ButtonStyle.success, row=3)
+    @discord.ui.button(label="💾 Save History", style=discord.ButtonStyle.success, row=2)
     async def save_history(self, interaction: discord.Interaction, button: Button):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("⛔ Admin Only", ephemeral=True)
-            return
-            
-        today = bangkok_now().strftime('%Y-%m-%d')
-        count = db_save_history(today)
-        
-        # [NEW] ส่งประวัติไปห้อง History Channel
+        if not interaction.user.guild_permissions.administrator: return
+        count = db_save_history(war_config["date"])
         if HISTORY_CHANNEL_ID:
-            history_channel = interaction.client.get_channel(HISTORY_CHANNEL_ID)
-            if history_channel:
-                embed = create_dashboard_embed()
-                embed.title = f"📜 สรุปยอดวอ วันที่ {today}"
-                embed.color = discord.Color.greyple()
-                embed.description = f"จบวอเรียบร้อย สมาชิกเข้าร่วม: {count} คน"
-                await history_channel.send(embed=embed)
-        
+            ch = interaction.client.get_channel(HISTORY_CHANNEL_ID)
+            if ch: await ch.send(embed=create_dashboard_embed(is_history=True))
         db_clear()
-        
-        await send_log(interaction, "💾 บันทึกประวัติ", f"บันทึกข้อมูล {count} คน และล้างตาราง", discord.Color.green())
         await interaction.message.edit(embed=create_dashboard_embed())
-        await interaction.response.send_message(f"✅ **บันทึกสถิติ {count} คน ลงห้อง History เรียบร้อยแล้ว!**\n(ตารางถูกรีเซ็ตพร้อมสำหรับวอรอบหน้า)", ephemeral=True)
+        await interaction.response.send_message(f"✅ บันทึกประวัติ {count} คน", ephemeral=True)
 
-# ==========================================
-# 📊 DASHBOARD
-# ==========================================
-def create_dashboard_embed():
+class AbsenceModal(Modal, title='แจ้งลา'):
+    def __init__(self, dashboard_msg):
+        super().__init__()
+        self.dashboard_msg = dashboard_msg
+    reason = TextInput(label='สาเหตุ', required=True)
+    async def on_submit(self, interaction: discord.Interaction):
+        db_upsert(interaction.user.id, interaction.user.display_name, "Absence", self.reason.value, "-")
+        await self.dashboard_msg.edit(embed=create_dashboard_embed())
+        await interaction.response.send_message("✅ แจ้งลาแล้ว", ephemeral=True)
+
+def generate_copy_text():
+    data = db_get_all()
+    text = f"⚔️ {war_config['title']} ({war_config['match_time']} น.)\n"
+    team_map = {name: [] for name in war_config["teams"]}
+    for user, team, role, time in data:
+        if team in team_map: team_map[team].append(f"- {user} ({role})")
+    for t in team_map:
+        text += f"\n🛡️ {t}\n" + ("\n".join(team_map[t]) if team_map[t] else "-")
+    return text
+
+def create_dashboard_embed(is_history=False):
     data = db_get_all()
     stats = {name: {"DPS":0, "Tank":0, "Heal":0, "Total":0} for name in war_config["teams"]}
-    stats["Absence"] = 0
-    
-    roster = {name: {"Main": [], "Standby": []} for name in war_config["teams"]}
-    roster["Absence"] = []
-    
-    for username, team, role, time_text in data:
-        if team == "Absence":
-            stats["Absence"] += 1
-            roster["Absence"].append(f"❌ `{username}` : {role}")
+    roster = {name: [] for name in war_config["teams"]}
+    absent = []
+
+    for user, team, role, time in data:
+        if team == "Absence": absent.append(f"❌ {user}: {role}")
         elif team in stats:
             stats[team]["Total"] += 1
             if role in stats[team]: stats[team][role] += 1
-            
-            role_emoji = "⚔️" if "DPS" in role else "🛡️" if "Tank" in role else "🌿"
-            
-            display_str = f"> {role_emoji} **{username}** `[{time_text}]`"
-            
-            if time_text == "Standby":
-                roster[team]["Standby"].append(f"💤 {username} [Standby]")
-            else:
-                roster[team]["Main"].append(display_str)
+            icon = "⚔️" if "DPS" in role else "🛡️" if "Tank" in role else "🌿"
+            roster[team].append(f"> {icon} **{user}** [{time}]")
 
-    try:
-        tz = pytz.timezone('Asia/Bangkok')
-        now_th = datetime.now(tz)
-        war_time_obj = datetime.strptime(war_config['time'], "%H:%M")
-        
-        date_input = war_config.get('date', 'Today').lower().strip()
-        target_date = now_th.date()
-
-        if date_input in ['tomorrow', 'พรุ่งนี้']:
-            target_date = now_th.date() + timedelta(days=1)
-        elif date_input not in ['today', 'วันนี้']:
-            clean_date = date_input.replace('-', '/')
-            try:
-                parsed_date = datetime.strptime(clean_date, "%d/%m")
-                target_date = parsed_date.replace(year=now_th.year).date()
-                if target_date < now_th.date() and (now_th.month == 12 and target_date.month == 1):
-                    target_date = target_date.replace(year=now_th.year + 1)
-            except:
-                pass
-
-        target_dt = tz.localize(datetime.combine(target_date, war_time_obj.time()))
-        ts = int(target_dt.timestamp())
-        
-        date_pretty = target_dt.strftime("%A, %d/%m")
-        time_display = f"📅 **{date_pretty}**\n<t:{ts}:F> • <t:{ts}:R>"
-    except Exception as e:
-        time_display = f"{war_config['date']} - {war_config['time']}"
-
-    lock_text = "🔒 SYSTEM LOCKED" if is_roster_locked else "🟢 OPEN REGISTRATION"
     color = 0xff2e4c if is_roster_locked else 0x00f7ff
-    embed = discord.Embed(title=f"{war_config['title']}", description=f"```ansi\n\u001b[0;33m⏰ START: {war_config['time']} น.\u001b[0m```\n{time_display}", color=color)
-
-    def make_visual_bar(stat_dict):
-        dps, tank, heal = stat_dict['DPS'], stat_dict['Tank'], stat_dict['Heal']
-        total = dps + tank + heal
-        header = f"🔥 **Total: {total}** (⚔️ `{dps}` 🛡️ `{tank}` 🌿 `{heal}`)"
-        if total == 0: bar = "⚫" * 10
-        else:
-            limit = 10
-            c_dps = int((dps / total) * limit) if total > 0 else 0
-            c_tank = int((tank / total) * limit) if total > 0 else 0
-            c_heal = limit - (c_dps + c_tank)
-            bar = ("🟥" * c_dps) + ("🟦" * c_tank) + ("🟩" * c_heal)
-            if len(bar) < limit: bar += "⚫" * (limit - len(bar))
-        return f"{header}\n`{bar}`"
-
-    for team_name in war_config["teams"]:
-        field_value = make_visual_bar(stats[team_name]) + "\n"
-        
-        if roster[team_name]["Main"]:
-            field_value += "\n" + "\n".join(roster[team_name]["Main"])
-        else:
-            field_value += "\n*... ว่าง ...*"
-            
-        if roster[team_name]["Standby"]:
-            field_value += "\n\n**— 💤 สำรอง / Standby —**\n" + "\n".join(roster[team_name]["Standby"])
-            
-        embed.add_field(name=f"▬▬▬▬ {team_name.upper()} ▬▬▬▬", value=field_value, inline=False)
-
-    if stats['Absence'] > 0:
-        embed.add_field(name="▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", value=f"🏳️ **Absence List ({stats['Absence']})**", inline=False)
-        embed.add_field(name="\u200b", value="\n".join(roster["Absence"]), inline=False)
-        
-    embed.set_footer(text=f"STATUS: {lock_text} | Last Updated: {bangkok_now().strftime('%H:%M:%S')}")
+    status_text = "🔒 SYSTEM LOCKED" if is_roster_locked else f"🟢 OPEN (Punt: {war_config['deadline_time']})"
+    title = f"📜 History: {war_config['title']}" if is_history else war_config['title']
+    desc = f"📅 **{war_config['date']}**\n⚔️ แข่ง: **{war_config['match_time']}** | ⛔ ปิดรับ: **{war_config['deadline_time']}**"
+    
+    embed = discord.Embed(title=title, description=desc, color=color)
+    for team in war_config["teams"]:
+        s = stats[team]
+        head = f"🔥 Total: {s['Total']} (⚔️{s['DPS']} 🛡️{s['Tank']} 🌿{s['Heal']})"
+        embed.add_field(name=f"🛡️ {team.upper()} | {head}", value="\n".join(roster[team]) if roster[team] else "*...*", inline=False)
+    if absent: embed.add_field(name=f"🏳️ ลา ({len(absent)})", value="\n".join(absent), inline=False)
+    
+    if not is_history: embed.set_footer(text=f"STATUS: {status_text} | Updated: {bangkok_now().strftime('%H:%M')}")
     return embed
 
 # ==========================================
-# 🤖 BOT COMMANDS
+# 🤖 BOT RUN
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -548,65 +444,20 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def auto_lock_task():
     global is_roster_locked
     if is_roster_locked: return
-
     now = bangkok_now().strftime("%H:%M")
-    if now == war_config["time"]:
+    if now == war_config["deadline_time"]: # เช็ค Deadline แทนเวลาเริ่ม
         is_roster_locked = True
-        print(f"⏰ Auto-locked roster at {now}")
+        print(f"⏰ Locked at {now}")
 
 @bot.event
 async def on_ready():
     init_db()
-    print(f'✅ Bot Online: {bot.user}')
+    print(f'✅ Ready: {bot.user}')
     await bot.tree.sync()
-    if not auto_lock_task.is_running():
-        auto_lock_task.start()
+    auto_lock_task.start()
 
-@bot.tree.command(name="setup_war", description="ตั้งค่าและเริ่มประกาศ")
+@bot.tree.command(name="setup_war_v3", description="เริ่มระบบ Setup แบบ Modal")
 async def setup_war(interaction: discord.Interaction):
     await interaction.response.send_message(embed=create_setup_embed(), view=SetupView(), ephemeral=True)
-
-@bot.tree.command(name="move_all", description="ย้ายสมาชิก")
-async def move_all(interaction: discord.Interaction, source: discord.VoiceChannel, target: discord.VoiceChannel):
-    if not interaction.guild.me.guild_permissions.move_members:
-        await interaction.response.send_message("⛔ บอทไม่มียศ", ephemeral=True)
-        return
-    for member in source.members:
-        try: await member.move_to(target)
-        except: pass
-    await interaction.response.send_message(f"✅ ย้ายสำเร็จ", ephemeral=True)
-
-@bot.tree.command(name="check_missing", description="เช็คคนขาด")
-async def check_missing(interaction: discord.Interaction, target_role: discord.Role):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT user_id FROM registrations")
-    ids = {row[0] for row in c.fetchall()}
-    conn.close()
-    missing = [m.mention for m in target_role.members if m.id not in ids and not m.bot]
-    if not missing: await interaction.response.send_message("✅ ครบ!", ephemeral=True)
-    else: await interaction.response.send_message(f"📢 **ขาด:** {', '.join(missing)}", ephemeral=True)
-
-@bot.tree.command(name="leaderboard", description="ดูอันดับการเข้าวอ")
-async def leaderboard(interaction: discord.Interaction):
-    data = db_get_leaderboard()
-    if not data:
-        await interaction.response.send_message("❌ ยังไม่มีประวัติการบันทึก", ephemeral=True)
-        return
-        
-    embed = discord.Embed(title="🏆 Guild War Leaderboard", color=discord.Color.gold())
-    desc = ""
-    for i, (name, count) in enumerate(data):
-        medal = "🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else f"#{i+1}"
-        desc += f"{medal} **{name}** : {count} ครั้ง\n"
-        
-    embed.description = desc
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="shutdown", description="ปิดบอท")
-async def shutdown(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator: return
-    await interaction.response.send_message("👋 Bye", ephemeral=True)
-    await bot.close()
 
 bot.run('Y')
