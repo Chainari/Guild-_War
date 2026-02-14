@@ -18,7 +18,7 @@ def bangkok_now():
 DB_NAME = "guildwar_ultimate.db"
 
 # 👇👇👇 ใส่เลขห้องตรงนี้ครับ 👇👇👇
-LOG_CHANNEL_ID = 1472149965299253457     # ห้อง Log (แอดมินดู)
+LOG_CHANNEL_ID = 1472149965299253457    # ห้อง Log (แอดมินดู)
 HISTORY_CHANNEL_ID = 1472149894096621639 # ห้อง History (เก็บประวัติย้อนหลัง)
 # 👆👆👆 ------------------- 👆👆👆
 
@@ -402,18 +402,20 @@ class MainWarView(View):
         await interaction.message.edit(embed=create_dashboard_embed())
         await interaction.response.send_message("🗑️ ลบรายชื่อเรียบร้อย", ephemeral=True, delete_after=5.0)
 
-    # [ปรับปรุง] ปุ่ม Copy ให้แสดงสถานะด้วย
     @discord.ui.button(label="📋 Copy", style=discord.ButtonStyle.secondary, row=2)
     async def copy_text(self, interaction: discord.Interaction, button: Button):
         data = db_get_all()
+        # [SORT] เรียงลำดับข้อมูลก่อน Copy ด้วย (Tank -> DPS -> Heal)
+        role_priority = {"Tank": 1, "DPS": 2, "Heal": 3}
+        data.sort(key=lambda x: (role_priority.get(x[2], 99), x[0])) 
+
         text = f"⚔️ **{war_config['title']}**\n📅 {war_config['date']} ⏰ {war_config['time']}\n\n"
         team_map = {name: [] for name in war_config["teams"]}
         absence_list = []
         for username, team, role, time in data:
             if team == "Absence": absence_list.append(f"- {username} ({role})")
             elif team in team_map: 
-                # เพิ่ม [Status] ต่อท้ายชื่อ
-                team_map[team].append(f"- {username} ({role}) `[{time}]`")
+                team_map[team].append(f"- {username} ({role}) [{time}]")
         for team_name in war_config["teams"]:
             text += f"🛡️ **{team_name}**\n" + ("\n".join(team_map[team_name]) if team_map[team_name] else "- ว่าง -") + "\n\n"
         text += "🏳️ **แจ้งลา**\n" + ("\n".join(absence_list) if absence_list else "- ไม่มี -")
@@ -472,6 +474,11 @@ class MainWarView(View):
 # ==========================================
 def create_dashboard_embed():
     data = db_get_all()
+    
+    # [SORT PRIORITY] Tank -> DPS -> Heal -> Name
+    role_priority = {"Tank": 1, "DPS": 2, "Heal": 3}
+    data.sort(key=lambda x: (role_priority.get(x[2], 99), x[0]))
+
     stats = {name: {"DPS":0, "Tank":0, "Heal":0, "Total":0} for name in war_config["teams"]}
     stats["Absence"] = 0
     
@@ -488,27 +495,30 @@ def create_dashboard_embed():
             
             role_emoji = "⚔️" if "DPS" in role else "🛡️" if "Tank" in role else "🌿"
             
-            # --- START NEW LOGIC: สร้างหลอดพลัง 8 ช่อง ---
+            # --- START NEW LOGIC: หลอดพลังในกรอบ Code Block ---
             status_display = ""
             
+            on_icon = "🟢"
+            off_icon = "⚫"
+            
             if "Full Time" in time_text:
-                status_display = "🟢"*8
+                status_display = f"{on_icon*4} {on_icon*4}" 
             elif "Round" in time_text:
                 bar = []
                 for i in range(1, 9): 
                     if f"Round {i}" in time_text:
-                        bar.append("🟢")
+                        bar.append(on_icon)
                     else:
-                        bar.append("⚫")
-                status_display = "".join(bar)
+                        bar.append(off_icon)
+                status_display = "".join(bar[:4]) + " " + "".join(bar[4:])
             else:
-                status_display = f"`[{time_text}]`"
+                status_display = f"[{time_text}]" # เอา backticks ออกก่อนเดี๋ยวใส่รวมกัน
 
             if "Late Join" in time_text and "Round" in time_text:
-                status_display += "🐢"
+                status_display += " 🐢"
             
-            # [แก้ไข] เอาหลอดพลังมาไว้ข้างหน้าชื่อ (Alignment Fix)
-            display_str = f"> {status_display} {role_emoji} **{username}**"
+            # [FIXED] ใส่ Backticks ครอบหลอดพลัง (`...`) เพื่อให้มีพื้นหลังสีดำเล็กๆ ตามรูป
+            display_str = f"> `{status_display}` | {role_emoji} **{username}**"
             # --- END NEW LOGIC ---
             
             if "Standby" in time_text:
