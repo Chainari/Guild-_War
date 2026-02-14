@@ -402,6 +402,7 @@ class MainWarView(View):
         await interaction.message.edit(embed=create_dashboard_embed())
         await interaction.response.send_message("🗑️ ลบรายชื่อเรียบร้อย", ephemeral=True, delete_after=5.0)
 
+    # [ปรับปรุง] ปุ่ม Copy ให้แสดงสถานะด้วย
     @discord.ui.button(label="📋 Copy", style=discord.ButtonStyle.secondary, row=2)
     async def copy_text(self, interaction: discord.Interaction, button: Button):
         data = db_get_all()
@@ -410,7 +411,9 @@ class MainWarView(View):
         absence_list = []
         for username, team, role, time in data:
             if team == "Absence": absence_list.append(f"- {username} ({role})")
-            elif team in team_map: team_map[team].append(f"- {username} ({role})")
+            elif team in team_map: 
+                # เพิ่ม [Status] ต่อท้ายชื่อ
+                team_map[team].append(f"- {username} ({role}) `[{time}]`")
         for team_name in war_config["teams"]:
             text += f"🛡️ **{team_name}**\n" + ("\n".join(team_map[team_name]) if team_map[team_name] else "- ว่าง -") + "\n\n"
         text += "🏳️ **แจ้งลา**\n" + ("\n".join(absence_list) if absence_list else "- ไม่มี -")
@@ -430,31 +433,24 @@ class MainWarView(View):
             await interaction.response.send_message("⛔ Admin Only", ephemeral=True)
             return
             
-        # Defer การตอบกลับไว้ก่อน เพราะการส่งไปห้องอื่นอาจใช้เวลา
         await interaction.response.defer(ephemeral=True) 
 
         today = bangkok_now().strftime('%Y-%m-%d')
         count = db_save_history(today)
         
-        # [UPDATE] ส่งประวัติไปห้อง History Channel (แบบ Force Fetch)
         if HISTORY_CHANNEL_ID:
             try:
-                # ใช้ fetch_channel แทน get_channel เพื่อบังคับหาห้อง
                 history_channel = await interaction.client.fetch_channel(HISTORY_CHANNEL_ID)
-                
                 embed = create_dashboard_embed()
                 embed.title = f"📜 สรุปยอดวอ วันที่ {today}"
                 embed.color = discord.Color.greyple()
                 embed.description = f"จบวอเรียบร้อย สมาชิกเข้าร่วม: {count} คน"
-                # เปลี่ยน Footer ให้ดูเป็นบันทึกประวัติ ไม่ใช่สถานะห้อง
                 embed.set_footer(text=f"Saved by {interaction.user.display_name} • {bangkok_now().strftime('%H:%M:%S')}")
-                
                 await history_channel.send(embed=embed)
             except Exception as e:
                 print(f"❌ Error sending history: {e}")
                 await interaction.followup.send(f"⚠️ บันทึกข้อมูลแล้ว แต่ส่งเข้าห้อง History ไม่ได้ (เช็คเลขห้อง/ยศบอท): {e}", ephemeral=True)
         
-        # [แก้ไข] เปลี่ยนหน้าจอประกาศเดิมให้เป็น "จบการทำงาน"
         try:
             embed = interaction.message.embeds[0]
             embed.title = f"🔴 จบวอแล้ว: {war_config['title']}"
@@ -464,7 +460,7 @@ class MainWarView(View):
             embed.set_footer(text="System Closed.")
             await interaction.message.edit(embed=embed, view=None)
         except:
-            pass # กัน error กรณีข้อความถูกลบไปก่อน
+            pass 
         
         db_clear()
         
@@ -495,30 +491,24 @@ def create_dashboard_embed():
             # --- START NEW LOGIC: สร้างหลอดพลัง 8 ช่อง ---
             status_display = ""
             
-            # กรณี Full Time (เขียว 8 เม็ด)
             if "Full Time" in time_text:
                 status_display = "🟢"*8
-            
-            # กรณีเลือกเป็นรอบๆ (Round 1-8)
             elif "Round" in time_text:
                 bar = []
-                for i in range(1, 9): # วนลูป 1 ถึง 8
+                for i in range(1, 9): 
                     if f"Round {i}" in time_text:
-                        bar.append("🟢") # ถ้าเลือก: เขียว
+                        bar.append("🟢")
                     else:
-                        bar.append("⚫") # ถ้าไม่เลือก: ดำ
+                        bar.append("⚫")
                 status_display = "".join(bar)
-            
-            # กรณีอื่นๆ (เช่น พิมพ์เอง Custom) ให้แสดงข้อความเดิม
             else:
                 status_display = f"`[{time_text}]`"
 
-            # เติมพวก Late Join หรืออื่นๆ ต่อท้ายหลอด
             if "Late Join" in time_text and "Round" in time_text:
-                status_display += " 🐢"
+                status_display += "🐢"
             
-            # [แสดงผล] ย้ายหลอดไปไว้หลังชื่อตาม Request
-            display_str = f"> {role_emoji} **{username}** {status_display}"
+            # [แก้ไข] เอาหลอดพลังมาไว้ข้างหน้าชื่อ (Alignment Fix)
+            display_str = f"> {status_display} {role_emoji} **{username}**"
             # --- END NEW LOGIC ---
             
             if "Standby" in time_text:
@@ -558,7 +548,6 @@ def create_dashboard_embed():
     color = 0xff2e4c if is_roster_locked else 0x00f7ff
     embed = discord.Embed(title=f"{war_config['title']}", description=f"```ansi\n\u001b[0;33m⏰ START: {war_config['time']} น.\u001b[0m```\n{time_display}", color=color)
 
-    # [แก้ไข] เปลี่ยนเป็นวงกลมเพื่อให้เห็นสีชัดเจนทุก Device
     def make_visual_bar(stat_dict):
         dps, tank, heal = stat_dict['DPS'], stat_dict['Tank'], stat_dict['Heal']
         total = dps + tank + heal
