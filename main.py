@@ -17,10 +17,10 @@ def bangkok_now():
 # ==========================================
 DB_NAME = "guildwar_ultimate.db"
 
-# 👇👇👇 แก้ไขเลขห้องตรงนี้ครับ 👇👇👇
-LOG_CHANNEL_ID = 1472149965299253457         # ห้อง Log (แอดมินดู)
-HISTORY_CHANNEL_ID = 1472149894096621639     # ห้อง History (เก็บประวัติย้อนหลัง)
-ALERT_CHANNEL_ID_FIXED = 1444345312188698738 # 🔥 ใส่เลขห้องแจ้งเตือน/ตามคน ตรงนี้ครับ 🔥
+# 👇👇👇 เลขห้องที่คุณตั้งค่าไว้ (ตรวจสอบอีกครั้งว่าถูกต้อง) 👇👇👇
+LOG_CHANNEL_ID = 1472149965299253457         # ห้อง Log
+HISTORY_CHANNEL_ID = 1472149894096621639    # ห้อง History
+ALERT_CHANNEL_ID_FIXED = 1444345312188698738 # ห้องแจ้งเตือน/ตามคน
 # 👆👆👆 ----------------------- 👆👆👆
 
 war_config = {
@@ -260,7 +260,6 @@ def create_setup_embed():
     embed.add_field(name="📅 หัวข้อ", value=war_config["title"], inline=False)
     embed.add_field(name="⏰ เวลา", value=f"{war_config['date']} @ {war_config['time']} น.", inline=True)
     
-    # แสดงห้องที่ Fix ไว้
     alert_text = f"<#{ALERT_CHANNEL_ID_FIXED}>" if ALERT_CHANNEL_ID_FIXED else "⚠️ ยังไม่ใส่ ID ห้องในโค้ด"
     embed.add_field(name="📢 ห้องแจ้งเตือน (Fixed)", value=alert_text, inline=True)
     
@@ -507,7 +506,6 @@ intents.message_content = True
 intents.members = True # 🔥🔥 สำคัญมาก! เปิดตาบอทให้มองเห็นสมาชิก 🔥🔥
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ฟังก์ชันอัปเดต Dashboard อัตโนมัติ (Helper)
 async def update_dashboard():
     if war_config["DASHBOARD_CHANNEL_ID"] and war_config["DASHBOARD_MSG_ID"]:
         try:
@@ -522,13 +520,11 @@ async def auto_lock_task():
     now = bangkok_now()
     current_time_str = now.strftime("%H:%M")
     
-    # 1. Auto Lock
     if not is_roster_locked and current_time_str == war_config["time"]:
         is_roster_locked = True
         await update_dashboard()
         print(f"⏰ Auto-locked roster at {current_time_str}")
 
-    # 2. Auto Reminder
     try:
         if war_config["ALERT_CHANNEL_ID"] and not war_config.get("reminded", False):
             target_time = datetime.strptime(war_config["time"], "%H:%M")
@@ -607,7 +603,6 @@ async def close_war(interaction: discord.Interaction):
 
 @bot.tree.command(name="check_missing", description="[Admin] เช็คคนขาด (เลือกยศ หรือ ไม่เลือกเพื่อเช็คทั้งเซิร์ฟ)")
 async def check_missing(interaction: discord.Interaction, target_role: discord.Role = None):
-    # ดึงรายชื่อคนลงทะเบียนแล้ว
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT user_id FROM registrations")
@@ -617,21 +612,17 @@ async def check_missing(interaction: discord.Interaction, target_role: discord.R
     missing = []
     check_scope = ""
 
-    # กรณี 1: เลือกยศ
     if target_role:
         check_scope = f"ยศ {target_role.mention}"
         for member in target_role.members:
             if not member.bot and member.id not in registered_ids:
                 missing.append(member.mention)
-    
-    # กรณี 2: ไม่เลือกยศ (เช็คทั้งเซิร์ฟ)
     else:
         check_scope = "ทุกคนในเซิร์ฟเวอร์"
         for member in interaction.guild.members:
             if not member.bot and member.id not in registered_ids:
                 missing.append(member.mention)
     
-    # ส่งผลลัพธ์
     target_channel = interaction.channel
     if war_config["ALERT_CHANNEL_ID"]:
         try: target_channel = bot.get_channel(war_config["ALERT_CHANNEL_ID"]) or await bot.fetch_channel(war_config["ALERT_CHANNEL_ID"])
@@ -640,11 +631,10 @@ async def check_missing(interaction: discord.Interaction, target_role: discord.R
     if not missing:
         await interaction.response.send_message(f"✅ {check_scope} ลงชื่อครบทุกคนแล้ว!", ephemeral=True)
     else:
-        # ถ้าคนเยอะเกินไป (เช่นเกิน 50 คน) ให้ส่งเป็นไฟล์หรือข้อความแยกเพื่อไม่ให้รก
         if len(missing) > 50:
             await interaction.response.send_message(f"⚠️ คนขาดเยอะมาก ({len(missing)} คน) เดี๋ยวส่งรายชื่อเข้าห้องแจ้งเตือน...", ephemeral=True)
-            text_list = "\n".join([m.replace("<@", "").replace(">", "") for m in missing]) # ID ล้วน
-             await target_channel.send(f"📢 **รายชื่อคนขาด ({check_scope}):**\n(จำนวน {len(missing)} คน)\n```\n{text_list}\n```")
+            text_list = "\n".join([m.replace("<@", "").replace(">", "") for m in missing]) 
+            await target_channel.send(f"📢 **รายชื่อคนขาด ({check_scope}):**\n(จำนวน {len(missing)} คน)\n```\n{text_list}\n```")
         else:
             msg_text = f"📢 **ตามคน ({check_scope}):** ยังไม่ลงชื่อ ({len(missing)} คน)\n{', '.join(missing)}"
             await target_channel.send(msg_text)
@@ -670,4 +660,4 @@ async def shutdown(interaction: discord.Interaction):
     await interaction.response.send_message("👋 Bye", ephemeral=True)
     await bot.close()
 
-bot.run('Y')
+bot.run('T')
