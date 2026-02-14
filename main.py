@@ -19,7 +19,7 @@ DB_NAME = "guildwar_ultimate.db"
 
 # 👇👇👇 เลขห้องที่คุณตั้งค่าไว้ (ตรวจสอบอีกครั้งว่าถูกต้อง) 👇👇👇
 LOG_CHANNEL_ID = 1472149965299253457         # ห้อง Log
-HISTORY_CHANNEL_ID = 1472149894096621639    # ห้อง History
+HISTORY_CHANNEL_ID = 1472149894096621639     # ห้อง History
 ALERT_CHANNEL_ID_FIXED = 1444345312188698738 # ห้องแจ้งเตือน/ตามคน
 # 👆👆👆 ----------------------- 👆👆👆
 
@@ -601,7 +601,8 @@ async def close_war(interaction: discord.Interaction):
     await send_log(interaction, "💾 จบวอ", f"บันทึก {count} คน และปิดงาน", discord.Color.green())
     await interaction.followup.send(f"✅ **ปิดจบคอร์สเรียบร้อย!**", ephemeral=True)
 
-@bot.tree.command(name="check_missing", description="[Admin] เช็คคนขาด (เลือกยศ หรือ ไม่เลือกเพื่อเช็คทั้งเซิร์ฟ)")
+# 👇👇👇 ส่วนที่ปรับแต่งข้อความประกาศใหม่ 👇👇👇
+@bot.tree.command(name="check_missing", description="[Admin] ตามคนขาดแบบ Silent Tag (แจ้งเตือนครั้งเดียว)")
 async def check_missing(interaction: discord.Interaction, target_role: discord.Role = None):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -609,36 +610,44 @@ async def check_missing(interaction: discord.Interaction, target_role: discord.R
     registered_ids = {row[0] for row in c.fetchall()}
     conn.close()
     
-    missing = []
-    check_scope = ""
+    missing_tags = []
+    targets = target_role.members if target_role else interaction.guild.members
+    check_scope = target_role.mention if target_role else "สมาชิกทุกคน"
 
-    if target_role:
-        check_scope = f"ยศ {target_role.mention}"
-        for member in target_role.members:
-            if not member.bot and member.id not in registered_ids:
-                missing.append(member.mention)
-    else:
-        check_scope = "ทุกคนในเซิร์ฟเวอร์"
-        for member in interaction.guild.members:
-            if not member.bot and member.id not in registered_ids:
-                missing.append(member.mention)
+    for member in targets:
+        if not member.bot and member.id not in registered_ids:
+            missing_tags.append(member.mention)
     
-    target_channel = interaction.channel
-    if war_config["ALERT_CHANNEL_ID"]:
-        try: target_channel = bot.get_channel(war_config["ALERT_CHANNEL_ID"]) or await bot.fetch_channel(war_config["ALERT_CHANNEL_ID"])
-        except: pass
+    target_channel = bot.get_channel(ALERT_CHANNEL_ID_FIXED) or interaction.channel
     
-    if not missing:
+    if not missing_tags:
         await interaction.response.send_message(f"✅ {check_scope} ลงชื่อครบทุกคนแล้ว!", ephemeral=True)
     else:
-        if len(missing) > 50:
-            await interaction.response.send_message(f"⚠️ คนขาดเยอะมาก ({len(missing)} คน) เดี๋ยวส่งรายชื่อเข้าห้องแจ้งเตือน...", ephemeral=True)
-            text_list = "\n".join([m.replace("<@", "").replace(">", "") for m in missing]) 
-            await target_channel.send(f"📢 **รายชื่อคนขาด ({check_scope}):**\n(จำนวน {len(missing)} คน)\n```\n{text_list}\n```")
-        else:
-            msg_text = f"📢 **ตามคน ({check_scope}):** ยังไม่ลงชื่อ ({len(missing)} คน)\n{', '.join(missing)}"
-            await target_channel.send(msg_text)
-            await interaction.response.send_message(f"✅ ส่งรายชื่อคนขาดไปที่ {target_channel.mention} แล้ว", ephemeral=True)
+        # ตกแต่งประกาศใหม่
+        header = f"⚔️ **GUILD WAR: MISSING ROSTER** ⚔️\n"
+        header += f"ขณะนี้ตรวจพบสมาชิก **{len(missing_tags)} ท่าน** ที่ยังไม่ได้ลงชื่อในตารางวอครับ\n"
+        header += f"╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼\n"
+        
+        content = " ".join(missing_tags)
+        
+        footer = f"\n╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼\n"
+        footer += f"⚠️ **กรุณาเข้าลงชื่อที่ Dashboard ให้เรียบร้อยด้วยนะครับ**\n"
+        footer += f"*ประกาศนี้แท็กเพื่อระบุตัวตนเท่านั้น จะไม่มีเสียงแจ้งเตือนรบกวนครับ*"
+
+        full_announcement = header + content + footer
+
+        try:
+            if len(full_announcement) > 2000:
+                # กรณีคนขาดเยอะมากจริงๆ จนเกินขีดจำกัด Discord
+                await target_channel.send(header + " (ส่วนที่ 1)", allowed_mentions=discord.AllowedMentions.none())
+                await target_channel.send(" ".join(missing_tags), allowed_mentions=discord.AllowedMentions.none())
+            else:
+                # ส่งประกาศแบบ Silent Mention (แจ้งเตือนแค่เสียงข้อความใหม่ครั้งเดียว)
+                await target_channel.send(full_announcement, allowed_mentions=discord.AllowedMentions.none())
+            
+            await interaction.response.send_message(f"✅ ส่งประกาศตามคนขาด {len(missing_tags)} คนเรียบร้อย!", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ เกิดข้อผิดพลาด: {e}", ephemeral=True)
 
 @bot.tree.command(name="leaderboard", description="ดูอันดับการเข้าวอ")
 async def leaderboard(interaction: discord.Interaction):
@@ -660,4 +669,4 @@ async def shutdown(interaction: discord.Interaction):
     await interaction.response.send_message("👋 Bye", ephemeral=True)
     await bot.close()
 
-bot.run('T')
+bot.run('Y')
