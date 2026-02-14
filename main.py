@@ -17,18 +17,18 @@ def bangkok_now():
 # ==========================================
 DB_NAME = "guildwar_ultimate.db"
 
-# 👇👇👇 ใส่เลขห้องตรงนี้ครับ 👇👇👇
-LOG_CHANNEL_ID = 1472149965299253457       # ห้อง Log (แอดมินดู)
-HISTORY_CHANNEL_ID = 1472149894096621639   # ห้อง History (เก็บประวัติย้อนหลัง)
-ALERT_CHANNEL_ID_FIXED = 1444345312188698738 # 🔥🔥 ใส่เลขห้องแจ้งเตือน/ตามคน ตรงนี้ครับ 🔥🔥
-# 👆👆👆 ------------------- 👆👆👆
+# 👇👇👇 แก้ไขเลขห้องตรงนี้ครับ 👇👇👇
+LOG_CHANNEL_ID = 1472149965299253457         # ห้อง Log (แอดมินดู)
+HISTORY_CHANNEL_ID = 1472149894096621639     # ห้อง History (เก็บประวัติย้อนหลัง)
+ALERT_CHANNEL_ID_FIXED = 1444345312188698738 # 🔥 ใส่เลขห้องแจ้งเตือน/ตามคน ตรงนี้ครับ 🔥
+# 👆👆👆 ----------------------- 👆👆👆
 
 war_config = {
     "title": "Guild War Roster",
     "date": "Today",
     "time": "19:30",
     "teams": ["Team ATK", "Team Flex"],
-    "ALERT_CHANNEL_ID": ALERT_CHANNEL_ID_FIXED, # ใช้ค่าที่ฟิกซ์ไว้
+    "ALERT_CHANNEL_ID": ALERT_CHANNEL_ID_FIXED,
     "DASHBOARD_CHANNEL_ID": None,
     "DASHBOARD_MSG_ID": None,
     "reminded": False
@@ -223,8 +223,6 @@ class SetupView(View):
     async def edit_config(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_message("👇 **เลือกวันที่:**", view=DatePickerView(), ephemeral=True)
 
-    # [REMOVED] ปุ่มตั้งค่าห้องแจ้งเตือนออกแล้ว เพราะใช้แบบ Hardcode
-
     @discord.ui.button(label="➕ เพิ่มทีม", style=discord.ButtonStyle.secondary, row=2)
     async def add_team(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(AddTeamModal())
@@ -240,7 +238,6 @@ class SetupView(View):
 
     @discord.ui.button(label="✅ ยืนยันและประกาศ", style=discord.ButtonStyle.green, row=3)
     async def confirm(self, interaction: discord.Interaction, button: Button):
-        # ใช้ห้องที่ Hardcode ไว้
         war_config["ALERT_CHANNEL_ID"] = ALERT_CHANNEL_ID_FIXED
         war_config["reminded"] = False
         
@@ -507,6 +504,7 @@ def create_dashboard_embed():
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True # 🔥🔥 สำคัญมาก! เปิดตาบอทให้มองเห็นสมาชิก 🔥🔥
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ฟังก์ชันอัปเดต Dashboard อัตโนมัติ (Helper)
@@ -530,7 +528,7 @@ async def auto_lock_task():
         await update_dashboard()
         print(f"⏰ Auto-locked roster at {current_time_str}")
 
-    # 2. Auto Reminder (ส่งไปที่ห้องแจ้งเตือนตาม ID ที่ใส่ไว้)
+    # 2. Auto Reminder
     try:
         if war_config["ALERT_CHANNEL_ID"] and not war_config.get("reminded", False):
             target_time = datetime.strptime(war_config["time"], "%H:%M")
@@ -580,7 +578,6 @@ async def close_war(interaction: discord.Interaction):
     today = bangkok_now().strftime('%Y-%m-%d')
     count = db_save_history(today)
     
-    # ส่ง History
     if HISTORY_CHANNEL_ID:
         try:
             h_channel = await interaction.client.fetch_channel(HISTORY_CHANNEL_ID)
@@ -591,7 +588,6 @@ async def close_war(interaction: discord.Interaction):
             await h_channel.send(embed=embed)
         except Exception as e: await interaction.followup.send(f"⚠️ ส่ง History ไม่ได้: {e}", ephemeral=True)
 
-    # ปิดหน้าจอ Dashboard
     if war_config["DASHBOARD_CHANNEL_ID"] and war_config["DASHBOARD_MSG_ID"]:
         try:
             channel = bot.get_channel(war_config["DASHBOARD_CHANNEL_ID"]) or await bot.fetch_channel(war_config["DASHBOARD_CHANNEL_ID"])
@@ -609,28 +605,64 @@ async def close_war(interaction: discord.Interaction):
     await send_log(interaction, "💾 จบวอ", f"บันทึก {count} คน และปิดงาน", discord.Color.green())
     await interaction.followup.send(f"✅ **ปิดจบคอร์สเรียบร้อย!**", ephemeral=True)
 
-@bot.tree.command(name="check_missing", description="[Admin] เช็คคนขาด (แจ้งเตือนในห้อง Alert)")
-async def check_missing(interaction: discord.Interaction, target_role: discord.Role):
+@bot.tree.command(name="check_missing", description="[Admin] เช็คคนขาด (เลือกยศ หรือ ไม่เลือกเพื่อเช็คทั้งเซิร์ฟ)")
+async def check_missing(interaction: discord.Interaction, target_role: discord.Role = None):
+    # ดึงรายชื่อคนลงทะเบียนแล้ว
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT user_id FROM registrations")
-    ids = {row[0] for row in c.fetchall()}
+    registered_ids = {row[0] for row in c.fetchall()}
     conn.close()
     
-    missing = [m.mention for m in target_role.members if m.id not in ids and not m.bot]
+    missing = []
+    check_scope = ""
+
+    # กรณี 1: เลือกยศ
+    if target_role:
+        check_scope = f"ยศ {target_role.mention}"
+        for member in target_role.members:
+            if not member.bot and member.id not in registered_ids:
+                missing.append(member.mention)
     
-    # ส่งผลลัพธ์ไปที่ Alert Channel (ที่ Fix ไว้ในโค้ด)
-    target_channel = interaction.channel # Default
+    # กรณี 2: ไม่เลือกยศ (เช็คทั้งเซิร์ฟ)
+    else:
+        check_scope = "ทุกคนในเซิร์ฟเวอร์"
+        for member in interaction.guild.members:
+            if not member.bot and member.id not in registered_ids:
+                missing.append(member.mention)
+    
+    # ส่งผลลัพธ์
+    target_channel = interaction.channel
     if war_config["ALERT_CHANNEL_ID"]:
         try: target_channel = bot.get_channel(war_config["ALERT_CHANNEL_ID"]) or await bot.fetch_channel(war_config["ALERT_CHANNEL_ID"])
         except: pass
     
     if not missing:
-        await interaction.response.send_message("✅ สมาชิกครบทุกคน!", ephemeral=True)
+        await interaction.response.send_message(f"✅ {check_scope} ลงชื่อครบทุกคนแล้ว!", ephemeral=True)
     else:
-        msg_text = f"📢 **ประกาศตามคน:** สมาชิกที่ยังไม่ลงชื่อ ({len(missing)} คน)\n{', '.join(missing)}"
-        await target_channel.send(msg_text)
-        await interaction.response.send_message(f"✅ ส่งรายชื่อคนขาดไปที่ {target_channel.mention} แล้ว", ephemeral=True)
+        # ถ้าคนเยอะเกินไป (เช่นเกิน 50 คน) ให้ส่งเป็นไฟล์หรือข้อความแยกเพื่อไม่ให้รก
+        if len(missing) > 50:
+            await interaction.response.send_message(f"⚠️ คนขาดเยอะมาก ({len(missing)} คน) เดี๋ยวส่งรายชื่อเข้าห้องแจ้งเตือน...", ephemeral=True)
+            text_list = "\n".join([m.replace("<@", "").replace(">", "") for m in missing]) # ID ล้วน
+             await target_channel.send(f"📢 **รายชื่อคนขาด ({check_scope}):**\n(จำนวน {len(missing)} คน)\n```\n{text_list}\n```")
+        else:
+            msg_text = f"📢 **ตามคน ({check_scope}):** ยังไม่ลงชื่อ ({len(missing)} คน)\n{', '.join(missing)}"
+            await target_channel.send(msg_text)
+            await interaction.response.send_message(f"✅ ส่งรายชื่อคนขาดไปที่ {target_channel.mention} แล้ว", ephemeral=True)
+
+@bot.tree.command(name="leaderboard", description="ดูอันดับการเข้าวอ")
+async def leaderboard(interaction: discord.Interaction):
+    data = db_get_leaderboard()
+    if not data:
+        await interaction.response.send_message("❌ ยังไม่มีประวัติการบันทึก", ephemeral=True)
+        return
+    embed = discord.Embed(title="🏆 Guild War Leaderboard", color=discord.Color.gold())
+    desc = ""
+    for i, (name, count) in enumerate(data):
+        medal = "🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else f"#{i+1}"
+        desc += f"{medal} **{name}** : {count} ครั้ง\n"
+    embed.description = desc
+    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="shutdown", description="ปิดบอท")
 async def shutdown(interaction: discord.Interaction):
