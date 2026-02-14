@@ -18,8 +18,8 @@ def bangkok_now():
 DB_NAME = "guildwar_ultimate.db"
 
 # 👇👇👇 ใส่เลขห้องตรงนี้ครับ 👇👇👇
-LOG_CHANNEL_ID = 1471767919112486912     # ห้อง Log (แอดมินดู)
-HISTORY_CHANNEL_ID = 1472117530721128679 # ห้อง History (เก็บประวัติย้อนหลัง)
+LOG_CHANNEL_ID = 1472149965299253457     # ห้อง Log (แอดมินดู)
+HISTORY_CHANNEL_ID = 1472148692969455771 # ห้อง History (เก็บประวัติย้อนหลัง)
 # 👆👆👆 ------------------- 👆👆👆
 
 war_config = {
@@ -302,37 +302,44 @@ class StatusSelect(Select):
         self.dashboard_msg = dashboard_msg
         
         options = [
-            discord.SelectOption(label="🔥 อยู่ยาว / Full Time", description="เริ่ม 19.30 ยันจบกี่โมงก็ช่าง", value="Full Time", emoji="🔥"),
-            discord.SelectOption(label="☝️ ขอรอบเดียว / 1 Round", description="เล่นรอบเดียวแล้วไปนอน/ทำงานต่อ", value="1 Round", emoji="☝️"),
-            discord.SelectOption(label="✌️ ไหว 2 รอบ / 2 Rounds", description="เผื่อเกมยืดเยื้อ", value="2 Rounds", emoji="✌️"),
-            discord.SelectOption(label="🤟 ไหว 3 รอบ / 3 Rounds", description="จัดไป 3 ตาจุกๆ", value="3 Rounds", emoji="🤟"),
-            discord.SelectOption(label="🐢 ตามไปทีหลัง / Late Join", description="มาไม่ทัน 19.30 แต่จะตามไป", value="Late Join", emoji="🐢"),
+            discord.SelectOption(label="🔥 อยู่ยาว / Full Time", description="จัดเต็มทุกรอบ", value="Full Time", emoji="🔥"),
+        ]
+        
+        emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣"]
+        for i in range(8):
+            round_num = i + 1
+            options.append(discord.SelectOption(label=f"Round {round_num}", description=f"ลงเล่นรอบที่ {round_num}", value=f"Round {round_num}", emoji=emojis[i]))
+            
+        options.extend([
+            discord.SelectOption(label="🐢 ตามไปทีหลัง / Late Join", description="มาไม่ทันเวลาเริ่ม แต่จะตามไป", value="Late Join", emoji="🐢"),
             discord.SelectOption(label="💤 สแตนด์บาย / Standby", description="ตัวสำรอง ถ้าคนขาดค่อยเรียก", value="Standby", emoji="💤"),
             discord.SelectOption(label="✏️ อื่นๆ / ระบุเอง (Other)", description="พิมพ์บอกช่วงเวลาเอง...", value="Other", emoji="✏️")
-        ]
-        super().__init__(placeholder="เลือกสถานะความพร้อมของคุณ...", min_values=1, max_values=1, options=options)
+        ])
+
+        # [แก้ไข] ปรับ max_values ให้เลือกได้หลายข้อ (เท่ากับจำนวนตัวเลือกทั้งหมด)
+        super().__init__(placeholder="เลือกสถานะ (เลือกได้หลายข้อ)...", min_values=1, max_values=len(options), options=options)
 
     async def callback(self, interaction: discord.Interaction):
         if is_roster_locked:
             await interaction.response.send_message("⛔ **ระบบปิดรับรายชื่อแล้ว**", ephemeral=True, delete_after=5.0)
             return
             
-        selected_value = self.values[0]
-
-        # ถ้าเลือก Other ให้เด้ง Modal ให้พิมพ์
-        if selected_value == "Other":
+        # ถ้าเลือก "Other" รวมมาด้วย ให้เด้ง Modal (เพราะต้องพิมพ์เอง)
+        if "Other" in self.values:
             await interaction.response.send_modal(CustomStatusModal(self.team, self.role, self.dashboard_msg))
             return
 
-        # ถ้าเลือกแบบปกติ บันทึกเลย
-        db_upsert(interaction.user.id, interaction.user.display_name, self.team, self.role, selected_value)
-        await send_log(interaction, "✅ ลงชื่อ", f"Team: {self.team}\nRole: {self.role}\nStatus: {selected_value}", discord.Color.green())
+        # [แก้ไข] เอาค่าที่เลือกทั้งหมดมารวมกันเป็น String (คั่นด้วยคอมม่า)
+        selected_text = ", ".join(self.values)
+
+        db_upsert(interaction.user.id, interaction.user.display_name, self.team, self.role, selected_text)
+        await send_log(interaction, "✅ ลงชื่อ", f"Team: {self.team}\nRole: {self.role}\nStatus: {selected_text}", discord.Color.green())
         
         if self.dashboard_msg:
             try: await self.dashboard_msg.edit(embed=create_dashboard_embed())
             except: pass
             
-        await interaction.response.send_message(f"✅ ลงทะเบียนสำเร็จ! **{self.team}** ({selected_value})", ephemeral=True, delete_after=5.0)
+        await interaction.response.send_message(f"✅ ลงทะเบียนสำเร็จ! **{self.team}** ({selected_text})", ephemeral=True, delete_after=5.0)
 
 class StatusSelectView(View):
     def __init__(self, team, role, dashboard_msg):
@@ -437,11 +444,21 @@ class MainWarView(View):
                 embed.description = f"จบวอเรียบร้อย สมาชิกเข้าร่วม: {count} คน"
                 await history_channel.send(embed=embed)
         
+        # [แก้ไข] เปลี่ยนหน้าจอประกาศเดิมให้เป็น "จบการทำงาน" (Type B Style)
+        embed = interaction.message.embeds[0]
+        embed.title = f"🔴 จบวอแล้ว: {war_config['title']}"
+        embed.color = 0x2f3136 # สีเทาเข้ม
+        embed.clear_fields() # ลบรายชื่อออกให้หมด
+        embed.description = f"✅ **บันทึกข้อมูลเรียบร้อย**\n📅 วันที่: {today}\n👥 จำนวนคน: {count} คน"
+        embed.set_footer(text="System Closed.")
+        
+        # ลบปุ่มออกให้หมด เพื่อไม่ให้กดเล่นต่อได้
+        await interaction.message.edit(embed=embed, view=None)
+        
         db_clear()
         
-        await send_log(interaction, "💾 บันทึกประวัติ", f"บันทึกข้อมูล {count} คน และล้างตาราง", discord.Color.green())
-        await interaction.message.edit(embed=create_dashboard_embed())
-        await interaction.response.send_message(f"✅ **บันทึกสถิติ {count} คน ลงห้อง History เรียบร้อยแล้ว!**\n(ตารางถูกรีเซ็ตพร้อมสำหรับวอรอบหน้า)", ephemeral=True)
+        await send_log(interaction, "💾 บันทึกประวัติ", f"บันทึกข้อมูล {count} คน และปิดประกาศ", discord.Color.green())
+        await interaction.response.send_message(f"✅ **ปิดจบคอร์สเรียบร้อย!**", ephemeral=True)
 
 # ==========================================
 # 📊 DASHBOARD
@@ -466,7 +483,7 @@ def create_dashboard_embed():
             
             display_str = f"> {role_emoji} **{username}** `[{time_text}]`"
             
-            if time_text == "Standby":
+            if "Standby" in time_text:
                 roster[team]["Standby"].append(f"💤 {username} [Standby]")
             else:
                 roster[team]["Main"].append(display_str)
@@ -503,6 +520,7 @@ def create_dashboard_embed():
     color = 0xff2e4c if is_roster_locked else 0x00f7ff
     embed = discord.Embed(title=f"{war_config['title']}", description=f"```ansi\n\u001b[0;33m⏰ START: {war_config['time']} น.\u001b[0m```\n{time_display}", color=color)
 
+    # [แก้ไข] เปลี่ยนเป็นวงกลมเพื่อให้เห็นสีชัดเจนทุก Device
     def make_visual_bar(stat_dict):
         dps, tank, heal = stat_dict['DPS'], stat_dict['Tank'], stat_dict['Heal']
         total = dps + tank + heal
@@ -513,7 +531,7 @@ def create_dashboard_embed():
             c_dps = int((dps / total) * limit) if total > 0 else 0
             c_tank = int((tank / total) * limit) if total > 0 else 0
             c_heal = limit - (c_dps + c_tank)
-            bar = ("🟥" * c_dps) + ("🟦" * c_tank) + ("🟩" * c_heal)
+            bar = ("🔴" * c_dps) + ("🔵" * c_tank) + ("🟢" * c_heal)
             if len(bar) < limit: bar += "⚫" * (limit - len(bar))
         return f"{header}\n`{bar}`"
 
