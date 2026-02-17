@@ -13,10 +13,10 @@ from datetime import datetime, timedelta
 def bangkok_now():
     return datetime.now(pytz.timezone('Asia/Bangkok'))
 
-# ใช้ชื่อ DB เดิม
-DB_NAME = "guildwar_new_season.db"
+# 🔥 แนะนำให้เปลี่ยนชื่อ DB เพื่อเริ่มระบบใหม่สะอาดๆ ครับ
+DB_NAME = "guildwar_v2.db"
 
-# 👇 ตรวจสอบ ID ห้องให้ถูกต้อง (แยกกันชัดเจน)
+# 👇 กรุณาตรวจสอบ ID ห้องให้ถูกต้อง (ต้องแยกกัน)
 ALERT_CHANNEL_ID_FIXED = 1444345312188698738
 LOG_CHANNEL_ID = 1472149965299253457      # 📝 ห้อง Log (รายงานสด)
 HISTORY_CHANNEL_ID = 1472149894096621639  # 🏆 ห้อง History (เก็บสถิติจบงาน)
@@ -54,7 +54,7 @@ def init_db():
 def create_event(title, date_str, time_str, teams_list):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    teams_str = ",".join(teams_list) 
+    teams_str = ",".join(teams_list)
     c.execute("INSERT INTO events (title, date_str, time_str, teams, active) VALUES (?, ?, ?, ?, 1)", 
             (title, date_str, time_str, teams_str))
     eid = c.lastrowid
@@ -81,6 +81,14 @@ def close_event_db(event_id):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("UPDATE events SET active=0 WHERE event_id=?", (event_id,))
+    conn.commit()
+    conn.close()
+
+def delete_event_db(event_id):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("DELETE FROM events WHERE event_id=?", (event_id,))
+    c.execute("DELETE FROM registrations WHERE event_id=?", (event_id,))
     conn.commit()
     conn.close()
 
@@ -146,7 +154,7 @@ def parse_event_datetime(date_str, time_str):
                 target_date = dt_obj.replace(year=now.year).date()
                 if target_date < now.date() and (now.month - target_date.month) > 6:
                     target_date = target_date.replace(year=now.year + 1)
-            except: return None 
+            except: return None
 
         if target_date:
             return now.replace(year=target_date.year, month=target_date.month, day=target_date.day, hour=t.hour, minute=t.minute, second=0)
@@ -164,7 +172,7 @@ def make_visual_bar(dps, tank, heal):
     c_tank = int((tank / total) * limit) if total > 0 else 0
     c_heal = limit - (c_dps + c_tank)
     
-    # 🔥 หลอดสีวงกลม
+    # 🔥 หลอดสีวงกลม (ตามที่ขอ)
     bar = ("🔴" * c_dps) + ("🔵" * c_tank) + ("🟢" * c_heal)
     if len(bar) < limit: bar += "⚫" * (limit - len(bar))
     return f"`{bar}`"
@@ -328,7 +336,7 @@ class SetupView(View):
 
     @discord.ui.button(label="✅ ยืนยันและประกาศ", style=discord.ButtonStyle.green, row=3)
     async def confirm(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer() 
+        await interaction.response.defer()
         s = get_session(interaction.user.id)
         ev_id = create_event(s['title'], s['date'], s['time'], s['teams'])
         
@@ -381,7 +389,7 @@ class TeamSelect(Select):
     def __init__(self, event_id, role, dashboard_msg):
         self.event_id, self.role_value, self.dashboard_msg = event_id, role, dashboard_msg
         ev = get_event(event_id)
-        teams = ev[4].split(",") 
+        teams = ev[4].split(",")
         options = [discord.SelectOption(label=t, value=t, emoji="🛡️") for t in teams]
         super().__init__(placeholder="เลือกทีม...", min_values=1, max_values=1, options=options)
     async def callback(self, interaction: discord.Interaction):
@@ -546,6 +554,29 @@ async def close_war(interaction: discord.Interaction, event_id: int):
     # 📝 Log การปิดงาน
     await send_log(interaction.client, f"**Closed:** Event #{event_id} closed by {interaction.user.display_name}")
     await interaction.response.send_message(f"🔴 ปิดงาน Event #{event_id} เรียบร้อย", ephemeral=True)
+
+@bot.tree.command(name="delete_event", description="ลบตารางและข้อมูลทั้งหมด (ระบุ Event ID)")
+async def delete_event(interaction: discord.Interaction, event_id: int):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ คุณไม่มีสิทธิ์ใช้คำสั่งนี้", ephemeral=True)
+
+    ev = get_event(event_id)
+    if not ev:
+        return await interaction.response.send_message(f"❌ ไม่พบ Event ID: {event_id}", ephemeral=True)
+
+    _, title, _, _, _, ch_id, msg_id, _ = ev
+    delete_event_db(event_id) # ลบจาก DB
+
+    # ลบข้อความในห้อง
+    try:
+        ch = bot.get_channel(ch_id)
+        if ch:
+            msg = await ch.fetch_message(msg_id)
+            await msg.delete()
+    except: pass
+
+    await send_log(interaction.client, f"**Deleted:** Event #{event_id} removed by {interaction.user.display_name}")
+    await interaction.response.send_message(f"🗑️ **ลบข้อมูล Event #{event_id} เรียบร้อยแล้ว!**", ephemeral=True)
 
 @bot.tree.command(name="leaderboard", description="ดูอันดับการเข้าวอ")
 async def leaderboard(interaction: discord.Interaction):
