@@ -13,13 +13,12 @@ from datetime import datetime, timedelta
 def bangkok_now():
     return datetime.now(pytz.timezone('Asia/Bangkok'))
 
-# 🔥 แนะนำให้เปลี่ยนชื่อ DB เพื่อเริ่มระบบใหม่สะอาดๆ ครับ
-DB_NAME = "guildwar_v2.db"
+DB_NAME = "guildwar_system_v4_ui.db"  # เปลี่ยนชื่อ DB อีกครั้งเพื่อล้างค่าเก่า (แนะนำ)
 
-# 👇 กรุณาตรวจสอบ ID ห้องให้ถูกต้อง (ต้องแยกกัน)
+# 👇 ใส่ ID ห้องให้ถูกต้อง
 ALERT_CHANNEL_ID_FIXED = 1444345312188698738
-LOG_CHANNEL_ID = 1472149965299253457      # 📝 ห้อง Log (รายงานสด)
-HISTORY_CHANNEL_ID = 1472149894096621639  # 🏆 ห้อง History (เก็บสถิติจบงาน)
+LOG_CHANNEL_ID = 1472149965299253457
+HISTORY_CHANNEL_ID = 1472149894096621639
 
 # 📦 SESSION STORAGE
 setup_sessions = {}
@@ -131,7 +130,6 @@ def db_get_leaderboard():
 # 🧠 HELPER FUNCTIONS
 # ==========================================
 async def send_log(bot, message):
-    """ส่ง Log ไปยังห้อง LOG_CHANNEL_ID"""
     if LOG_CHANNEL_ID:
         try:
             ch = bot.get_channel(LOG_CHANNEL_ID)
@@ -161,8 +159,34 @@ def parse_event_datetime(date_str, time_str):
     except: return None
     return None
 
+def format_full_date(date_str):
+    """แปลงวันที่สั้นๆ ให้เป็นวันที่เต็มยศ (เช่น Friday, 21 February 2026)"""
+    now = bangkok_now()
+    try:
+        target_date = None
+        d_str = date_str.lower().strip()
+
+        if d_str in ["today", "วันนี้"]:
+            target_date = now.date()
+        elif d_str in ["tomorrow", "พรุ่งนี้"]:
+            target_date = now.date() + timedelta(days=1)
+        else:
+            # กรณี "21/02" หรือ "21/02 (Fri)"
+            clean_date = d_str.split(" ")[0]
+            dt_obj = datetime.strptime(clean_date, "%d/%m")
+            target_date = dt_obj.replace(year=now.year).date()
+            if target_date < now.date() and (now.month - target_date.month) > 6:
+                target_date = target_date.replace(year=now.year + 1)
+        
+        if target_date:
+            # รูปแบบ: Friday, 21 February 2026
+            return target_date.strftime("%A, %d %B %Y")
+    except:
+        pass
+    return date_str # ถ้าแปลงไม่ได้ให้ใช้ค่าเดิม
+
 # ==========================================
-# 📊 DASHBOARD GENERATOR
+# 📊 DASHBOARD GENERATOR (UI UPGRADE)
 # ==========================================
 def make_visual_bar(dps, tank, heal):
     total = dps + tank + heal
@@ -172,7 +196,7 @@ def make_visual_bar(dps, tank, heal):
     c_tank = int((tank / total) * limit) if total > 0 else 0
     c_heal = limit - (c_dps + c_tank)
     
-    # 🔥 หลอดสีวงกลม (ตามที่ขอ)
+    # หลอดสี
     bar = ("🔴" * c_dps) + ("🔵" * c_tank) + ("🟢" * c_heal)
     if len(bar) < limit: bar += "⚫" * (limit - len(bar))
     return f"`{bar}`"
@@ -182,7 +206,7 @@ def create_dashboard_embed(event_id):
     if not event: return discord.Embed(title="❌ Event Not Found")
     
     ev_id, title, date_str, time_str, teams_str, _, _, active = event
-    teams = teams_str.split(",") 
+    teams = teams_str.split(",")
     data = get_roster(event_id)
     role_priority = {"Tank": 1, "DPS": 2, "Heal": 3}
     data.sort(key=lambda x: (role_priority.get(x[2], 99), x[0]))
@@ -199,7 +223,6 @@ def create_dashboard_embed(event_id):
             if role in stats[team]: stats[team][role] += 1
             emoji = "⚔️" if "DPS" in role else "🛡️" if "Tank" in role else "🌿"
             
-            # 🔥 แปลง Round เป็นจุดสี
             on, off = "🟢", "⚫"
             if "Full Time" in time_text:
                 bar = f"{on*4} {on*4}"
@@ -221,23 +244,44 @@ def create_dashboard_embed(event_id):
     status_text = "🟢 OPEN REGISTRATION" if active else "🔒 LOCKED / ENDED"
     color = 0x00f7ff if active else 0xff2e4c
     
-    desc = f"```ansi\n\u001b[0;33m# ⏰ START: {time_str} น.\u001b[0m```\n📅 **Date:** {date_str}"
+    # 🔥 แปลงวันที่เป็นแบบเต็มยศ
+    full_date_text = format_full_date(date_str)
+
+    desc = f"```ansi\n\u001b[0;33m# ⏰ START: {time_str} น.\u001b[0m```\n📅 **Date:** {full_date_text}\n━━━━━━━━━━━━━━━━━━━━━━"
     
     embed = discord.Embed(title=f"⚔️ {title}", description=desc, color=color)
     
     for t in teams:
         s = stats[t]
         visual_bar = make_visual_bar(s['DPS'], s['Tank'], s['Heal'])
+        
+        # 🔥 เพิ่ม Spacing และจัดระเบียบ Header
         header_text = f"🔥 Total: {s['Total']} (🛡️{s['Tank']} ⚔️{s['DPS']} 🌿{s['Heal']})\n{visual_bar}\n"
         
         val = header_text
-        if roster[t]["Main"]: val += "\n".join(roster[t]["Main"])
-        else: val += "*... ว่าง ...*"
-        if roster[t]["Late"]: val += "\n\n**🐢 มาสาย / Late Join**\n" + "\n".join(roster[t]["Late"])
-        if roster[t]["Standby"]: val += "\n\n**💤 สำรอง / Standby**\n" + "\n".join(roster[t]["Standby"])
+        # เพิ่มบรรทัดว่างก่อนเริ่มรายชื่อ
+        val += "\n"
+        
+        if roster[t]["Main"]:
+            val += "\n".join(roster[t]["Main"])
+        else:
+            val += "*... ว่าง ...*"
+            
+        if roster[t]["Late"]:
+            # เพิ่มบรรทัดว่างแยกหมวด
+            val += "\n\n**🐢 มาสาย / Late Join**\n" + "\n".join(roster[t]["Late"])
+            
+        if roster[t]["Standby"]:
+            val += "\n\n**💤 สำรอง / Standby**\n" + "\n".join(roster[t]["Standby"])
+            
+        # เพิ่มบรรทัดว่างท้ายสุดของทีม
+        val += "\n\u200b"
+        
         embed.add_field(name=f"▬▬▬▬ {t.upper()} ▬▬▬▬", value=val, inline=False)
         
-    if absence_list: embed.add_field(name="🏳️ แจ้งลา (Absence)", value="\n".join(absence_list), inline=False)
+    if absence_list:
+        embed.add_field(name="🏳️ แจ้งลา (Absence)", value="\n".join(absence_list), inline=False)
+        
     embed.set_footer(text=f"EVENT ID: #{event_id} | STATUS: {status_text} | Last Updated: {bangkok_now().strftime('%H:%M:%S')}")
     return embed
 
@@ -251,9 +295,13 @@ def get_session(user_id):
 
 def create_setup_embed(user_id):
     s = get_session(user_id)
+    
+    # โชว์วันที่แบบเต็มในหน้า Setup ด้วย
+    full_date_preview = format_full_date(s['date'])
+
     embed = discord.Embed(title="🛠️ ตั้งค่าตารางวอ (Setup Mode)", description="ปรับแต่งข้อมูลก่อนประกาศจริง", color=0x3498db)
     embed.add_field(name="📝 หัวข้อ", value=s["title"], inline=False)
-    embed.add_field(name="📅 วันที่", value=s["date"], inline=True)
+    embed.add_field(name="📅 วันที่", value=full_date_preview, inline=True)
     embed.add_field(name="⏰ เวลา", value=s["time"], inline=True)
     teams_str = "\n".join([f"- {t}" for t in s["teams"]])
     embed.add_field(name=f"🛡️ ทีม ({len(s['teams'])})", value=f"```\n{teams_str}\n```", inline=False)
@@ -336,7 +384,7 @@ class SetupView(View):
 
     @discord.ui.button(label="✅ ยืนยันและประกาศ", style=discord.ButtonStyle.green, row=3)
     async def confirm(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer()
+        await interaction.response.defer() 
         s = get_session(interaction.user.id)
         ev_id = create_event(s['title'], s['date'], s['time'], s['teams'])
         
@@ -345,11 +393,19 @@ class SetupView(View):
         msg = await interaction.channel.send(embed=embed, view=view)
         update_event_msg(ev_id, msg.channel.id, msg.id)
         
-        # 📝 Log การสร้าง
         await send_log(interaction.client, f"**Created:** Event #{ev_id} by {interaction.user.display_name}")
         
         del setup_sessions[interaction.user.id]
         await interaction.edit_original_response(content=f"✅ **ประกาศเรียบร้อย!**\n🆔 **Event ID: {ev_id}**\n(ใช้เลขนี้สำหรับ /check_missing)", embed=None, view=None)
+    
+    @discord.ui.button(label="❌ ยกเลิก", style=discord.ButtonStyle.red, row=3)
+    async def cancel(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer()
+        try:
+            await interaction.delete_original_response()
+            if interaction.user.id in setup_sessions:
+                del setup_sessions[interaction.user.id]
+        except: pass
 
 # ==========================================
 # 📝 UI COMPONENTS
@@ -370,7 +426,6 @@ class StatusSelect(Select):
         try: await self.dashboard_msg.edit(embed=create_dashboard_embed(self.event_id))
         except: pass
         
-        # 📝 Log การลงชื่อ
         await send_log(interaction.client, f"**Joined:** {interaction.user.display_name} -> {self.team} ({self.role})")
         await interaction.response.edit_message(content="✅ **ลงทะเบียนสำเร็จ!** (ปิดใน 5 วิ...)", view=None, delete_after=5.0)
 
@@ -429,7 +484,6 @@ class PersistentWarView(View):
         reg_remove(self.event_id, interaction.user.id)
         await interaction.response.edit_message(embed=create_dashboard_embed(self.event_id))
         
-        # 📝 Log การลบ
         await send_log(interaction.client, f"**Left:** {interaction.user.display_name} removed registration.")
         await interaction.followup.send("🗑️ ลบชื่อเรียบร้อย", ephemeral=True)
 
@@ -449,7 +503,6 @@ class AbsenceModal(Modal, title='แบบฟอร์มแจ้งลา'):
         try: await self.dashboard_msg.edit(embed=create_dashboard_embed(self.event_id))
         except: pass
         
-        # 📝 Log การลา
         await send_log(interaction.client, f"**Absence:** {interaction.user.display_name} -> {self.reason.value}")
         await interaction.response.send_message("🏳️ บันทึกแล้ว", ephemeral=True, delete_after=5.0)
 
@@ -485,14 +538,14 @@ async def on_ready():
 @bot.tree.command(name="setup_war", description="ตั้งค่าตารางวอ (แบบปุ่มกด)")
 async def setup_war(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator: return
-    get_session(interaction.user.id) 
+    get_session(interaction.user.id)
     await interaction.response.send_message(embed=create_setup_embed(interaction.user.id), view=SetupView(), ephemeral=True)
 
 @bot.tree.command(name="check_missing", description="ตามคนขาด (ระบุ Event ID)")
 async def check_missing(interaction: discord.Interaction, event_id: int, target_role: discord.Role = None):
     ev = get_event(event_id)
     if not ev: return await interaction.response.send_message("❌ ไม่พบ Event ID นี้", ephemeral=True)
-    _, title, date_str, time_str, _, ch_id, msg_id, active = ev 
+    _, title, date_str, time_str, _, ch_id, msg_id, active = ev
 
     conn = sqlite3.connect(DB_NAME)
     reg_ids = {row[0] for row in conn.execute("SELECT user_id FROM registrations WHERE event_id=?", (event_id,))}
@@ -540,7 +593,6 @@ async def close_war(interaction: discord.Interaction, event_id: int):
             await msg.edit(embed=create_dashboard_embed(event_id))
         except: pass
     
-    # 🏆 ส่งเข้า History
     if HISTORY_CHANNEL_ID:
         try:
             hist_ch = bot.get_channel(HISTORY_CHANNEL_ID)
@@ -551,7 +603,6 @@ async def close_war(interaction: discord.Interaction, event_id: int):
         except Exception as e:
             print(f"❌ History Send Fail: {e}")
 
-    # 📝 Log การปิดงาน
     await send_log(interaction.client, f"**Closed:** Event #{event_id} closed by {interaction.user.display_name}")
     await interaction.response.send_message(f"🔴 ปิดงาน Event #{event_id} เรียบร้อย", ephemeral=True)
 
@@ -565,9 +616,8 @@ async def delete_event(interaction: discord.Interaction, event_id: int):
         return await interaction.response.send_message(f"❌ ไม่พบ Event ID: {event_id}", ephemeral=True)
 
     _, title, _, _, _, ch_id, msg_id, _ = ev
-    delete_event_db(event_id) # ลบจาก DB
+    delete_event_db(event_id)
 
-    # ลบข้อความในห้อง
     try:
         ch = bot.get_channel(ch_id)
         if ch:
