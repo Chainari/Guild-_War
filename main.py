@@ -15,7 +15,7 @@ def bangkok_now():
     return datetime.now(pytz.timezone('Asia/Bangkok'))
 
 # 🔥 ใช้ DB ตัวเดิมได้เลย
-DB_NAME = "guildwar_system_v9_weapons.db"
+DB_NAME = "guildwar_system_v4_ui.db"
 
 # 👇 กรุณาตรวจสอบ ID ห้องให้ถูกต้อง
 ALERT_CHANNEL_ID_FIXED = 1444345312188698738
@@ -52,9 +52,30 @@ def init_db():
                 weapons TEXT,
                 joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (event_id, user_id))''')
+
+    # 🔥 ตารางสำหรับบอร์ดทำเนียบสมาชิกกิลด์
+    c.execute('''CREATE TABLE IF NOT EXISTS guild_members
+                (user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                role TEXT,
+                weapons TEXT,
+                joined_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+                
+    # ดักไว้เผื่อเคยสร้างตารางไปแล้ว จะได้เพิ่มช่อง weapons ให้เลยไม่บัค
+    try: c.execute("ALTER TABLE guild_members ADD COLUMN weapons TEXT")
+    except: pass
+
+    # 🔥 ตารางเก็บลิงก์เพื่อทำปุ่มวาร์ป
+    c.execute('''CREATE TABLE IF NOT EXISTS bot_config
+                (config_name TEXT PRIMARY KEY,
+                guild_id INTEGER,
+                channel_id INTEGER,
+                message_id INTEGER)''')
+
     conn.commit()
     conn.close()
 
+# ---- ฟังก์ชัน DB ของ Guild War ----
 def create_event(title, date_str, time_str, teams_list, color):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -64,6 +85,7 @@ def create_event(title, date_str, time_str, teams_list, color):
     eid = c.lastrowid
     conn.commit()
     conn.close()
+    return eid
 
 def update_event_msg(event_id, ch_id, msg_id):
     conn = sqlite3.connect(DB_NAME)
@@ -131,6 +153,54 @@ def db_get_leaderboard():
     data = c.fetchall()
     conn.close()
     return data
+
+# ---- ฟังก์ชัน DB ของ Member Board ----
+def set_member_board_link(guild_id, channel_id, message_id):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('''INSERT OR REPLACE INTO bot_config (config_name, guild_id, channel_id, message_id)
+                VALUES ('member_board', ?, ?, ?)''', (guild_id, channel_id, message_id))
+    conn.commit()
+    conn.close()
+
+def get_member_board_link():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT guild_id, channel_id, message_id FROM bot_config WHERE config_name='member_board'")
+    row = c.fetchone()
+    conn.close()
+    return row
+
+def member_upsert(user_id, username, role, weapons):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('''INSERT OR REPLACE INTO guild_members 
+                (user_id, username, role, weapons, joined_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''', 
+            (user_id, username, role, weapons))
+    conn.commit()
+    conn.close()
+
+def member_remove(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("DELETE FROM guild_members WHERE user_id=?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def get_all_members():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT username, role, weapons FROM guild_members ORDER BY joined_at ASC")
+    data = c.fetchall()
+    conn.close()
+    return data
+
+def clear_all_members():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("DELETE FROM guild_members")
+    conn.commit()
+    conn.close()
 
 # ==========================================
 # 🧠 HELPER FUNCTIONS
@@ -214,13 +284,11 @@ def make_visual_bar(dps, tank, heal):
     limit = 10
     if total == 0: return "⚫" * limit
     
-    # 🛠️ แก้บัค Total: ให้ 1 คน = 1 จุด หากจำนวนคนไม่เกิน Limit
     if total <= limit:
         c_dps = dps
         c_tank = tank
         c_heal = heal
     else:
-        # ถ้าคนเกิน limit ค่อยคำนวณสัดส่วน %
         c_dps = int((dps / total) * limit)
         c_tank = int((tank / total) * limit)
         c_heal = limit - (c_dps + c_tank)
@@ -258,8 +326,6 @@ def create_dashboard_embed(event_id):
             
         emoji = "⚔️" if "DPS" in role else "🛡️" if "Tank" in role else "🌿"
         
-        # 🔥 ตัดชื่ออาวุธออก เพื่อให้ตารางคลีน (ย้ายไปดูในปุ่มแยก)
-        
         if is_main:
             on, off = "🟢", "⚫"
             if "Full Time" in time_text: bar = f"{on*4} {on*4}"
@@ -271,7 +337,7 @@ def create_dashboard_embed(event_id):
                 bar = "".join(rounds_visual[:4]) + " " + "".join(rounds_visual[4:])
             else: bar = f"[{time_text}]"
             
-            # 🔥 เรียงเลข + หลอด + ชื่อ (ไม่มีอาวุธต่อท้าย)
+            # 🔥 มีตัวเลขแสดงลำดับ
             num = len(roster[team]["Main"]) + 1
             display = f"> `{num}.` `{bar}` | {emoji} **{username}**"
             roster[team]["Main"].append(display)
@@ -304,8 +370,36 @@ def create_dashboard_embed(event_id):
     embed.set_footer(text=f"EVENT ID: #{event_id} | STATUS: {status_text} | Last Updated: {bangkok_now().strftime('%H:%M:%S')}")
     return embed
 
+def create_member_board_embed():
+    data = get_all_members()
+    roster = {"DPS": [], "Tank": [], "Heal": []}
+    emojis = {"DPS": "⚔️", "Tank": "🛡️", "Heal": "🌿"}
+    
+    for username, role, weapons in data:
+        if role in roster:
+            emoji = emojis.get(role, "👤")
+            wp_text = f"`{weapons}`" if weapons and weapons != "-" else "`ยังไม่ระบุอาวุธ`"
+            # 🔥 มีตัวเลขแสดงลำดับ
+            num = len(roster[role]) + 1
+            roster[role].append(f"> `{num}.` {emoji} **{username}** - {wp_text}")
+            
+    embed = discord.Embed(title="👺 ทำเนียบจอมยุทธ์กิลด์ 天狗", description="ลงทะเบียนสายตำแหน่งและอาวุธหลักของคุณ", color=0x2ecc71)
+    
+    roles_info = [
+        ("DPS", "⚔️ สังกัดหน่วยโจมตี (DPS)", roster["DPS"]),
+        ("Tank", "🛡️ สังกัดหน่วยป้องกัน (Tank)", roster["Tank"]),
+        ("Heal", "🌿 สังกัดหน่วยสนับสนุน (Heal)", roster["Heal"])
+    ]
+    
+    for role_key, role_title, members_list in roles_info:
+        val = "\n".join(members_list) if members_list else "*... ยังไม่มีจอมยุทธ์ในสังกัดนี้ ...*"
+        embed.add_field(name=f"{role_title} ({len(members_list)} คน)", value=val, inline=False)
+        
+    embed.set_footer(text=f"อัปเดตล่าสุด: {bangkok_now().strftime('%d/%m/%Y %H:%M')}")
+    return embed
+
 # ==========================================
-# 🛠️ SETUP SYSTEM
+# 🛠️ SETUP SYSTEM (Guild War)
 # ==========================================
 def get_session(user_id):
     if user_id not in setup_sessions:
@@ -453,7 +547,6 @@ class WeaponSelect(Select):
         self.status_text = status_text
         self.dashboard_msg = dashboard_msg
         
-        # 🔥 อาวุธ 16 ชนิด
         options = [
             discord.SelectOption(label="Nameless Sword", description="ดาบไร้นาม", emoji="⚔️"),
             discord.SelectOption(label="Nameless Spear", description="หอกไร้นาม", emoji="🦯"),
@@ -472,7 +565,6 @@ class WeaponSelect(Select):
             discord.SelectOption(label="Zui Meng You Chun", description="ร่มสายใหม่", emoji="🌂"),
             discord.SelectOption(label="Su Zi Xing Yun", description="มีดติดเชือก (แซ่) สายใหม่", emoji="⛓️")
         ]
-        # จำกัดการเลือก 1 ถึง 2 ชิ้น
         super().__init__(placeholder="⚔️ เลือกอาวุธ (1 ถึง 2 ชิ้น)...", min_values=1, max_values=2, options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -499,7 +591,6 @@ class StatusSelect(Select):
 
     async def callback(self, interaction: discord.Interaction):
         status_text = ", ".join(self.values)
-        # เด้งไปหน้าเลือกอาวุธต่อ
         view = View().add_item(WeaponSelect(self.event_id, self.team, self.role, status_text, self.dashboard_msg))
         await interaction.response.edit_message(content=f"⚔️ **ระบุอาวุธที่ใช้ (เลือก 1-2 ชิ้น)**", view=view)
 
@@ -517,11 +608,17 @@ class TeamSelect(Select):
 class RoleSelect(Select):
     def __init__(self, event_id):
         self.event_id = event_id
-        super().__init__(placeholder="เลือกตำแหน่งของคุณ...", options=[
-            discord.SelectOption(label="Tank", value="Tank", emoji="🛡️"),
-            discord.SelectOption(label="Main DPS", value="DPS", emoji="⚔️"),
-            discord.SelectOption(label="Healer", value="Heal", emoji="🌿"),
-        ])
+        # 🔥 แก้บั๊ก Custom ID ตรงนี้แล้ว ทำให้บอทรีสตาร์ทก็ยังกดได้
+        super().__init__(
+            placeholder="เลือกตำแหน่งของคุณ...", 
+            custom_id=f"role_select_war_{event_id}",
+            options=[
+                discord.SelectOption(label="Tank", value="Tank", emoji="🛡️"),
+                discord.SelectOption(label="Main DPS", value="DPS", emoji="⚔️"),
+                discord.SelectOption(label="Healer", value="Heal", emoji="🌿"),
+            ]
+        )
+        
     async def callback(self, interaction: discord.Interaction):
         ev = get_event(self.event_id)
         if not ev or ev[8] == 0: return await interaction.response.send_message("🔒 ปิดแล้ว", ephemeral=True)
@@ -538,7 +635,6 @@ class PersistentWarView(View):
     async def refresh(self, interaction: discord.Interaction, button: Button):
         await interaction.response.edit_message(embed=create_dashboard_embed(self.event_id))
 
-    # 🔥 ปุ่มใหม่! เช็คอาวุธแยกต่างหาก
     @discord.ui.button(label="🔍 เช็คอาวุธ", style=discord.ButtonStyle.primary, row=2, custom_id="check_weapons")
     async def check_weapons(self, interaction: discord.Interaction, button: Button):
         data = get_roster(self.event_id)
@@ -556,7 +652,6 @@ class PersistentWarView(View):
             val = ""
             for p in team_players:
                 username, _, role, _, weapons = p
-                # ไม่แสดงคนแจ้งลา
                 if t == "Absence": continue
 
                 emoji = "⚔️" if "DPS" in role else "🛡️" if "Tank" in role else "🌿"
@@ -570,7 +665,6 @@ class PersistentWarView(View):
         if not found_any:
             embed.description = "ยังไม่มีข้อมูลการลงชื่อ หรือ อาวุธ"
 
-        # ส่งข้อความแบบ ephemeral (เห็นแค่คนกด)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="🏳️ แจ้งลา", style=discord.ButtonStyle.gray, row=2, custom_id="absence")
@@ -632,6 +726,77 @@ class AbsenceModal(Modal, title='แบบฟอร์มแจ้งลา'):
         await interaction.response.send_message("🏳️ บันทึกแล้ว", ephemeral=True, delete_after=5.0)
 
 # ==========================================
+# 📝 UI COMPONENTS (Member Board)
+# ==========================================
+class MemberWeaponSelect(Select):
+    def __init__(self, role, dashboard_msg):
+        self.role = role
+        self.dashboard_msg = dashboard_msg
+        
+        options = [
+            discord.SelectOption(label="Nameless Sword", description="ดาบไร้นาม", emoji="⚔️"),
+            discord.SelectOption(label="Nameless Spear", description="หอกไร้นาม", emoji="🦯"),
+            discord.SelectOption(label="Strategic Sword", description="ดาบเลือด", emoji="🩸"),
+            discord.SelectOption(label="Heavenquaker Spear", description="หอกเลือด", emoji="🩸"),
+            discord.SelectOption(label="Thundercry Blade", description="ดาบสายฟ้า", emoji="⚡"),
+            discord.SelectOption(label="Stormbreaker Spear", description="หอกแทงค์", emoji="🛡️"),
+            discord.SelectOption(label="Infernal Twinblades", description="ดาบคู่", emoji="⚔️"),
+            discord.SelectOption(label="Mortal Rope Dart", description="มีดติดเชือก", emoji="🪢"),
+            discord.SelectOption(label="Vernal Umbrella", description="ร่ม DPS", emoji="☂️"),
+            discord.SelectOption(label="Soulshade Umbrella", description="ร่ม Heal", emoji="🌿"),
+            discord.SelectOption(label="Inkwell Fan", description="พัด DPS", emoji="🪭"),
+            discord.SelectOption(label="Panacea Fan", description="พัด Heal", emoji="🍃"),
+            discord.SelectOption(label="Hengdao", description="ดาบถังเหิง", emoji="🗡️"),
+            discord.SelectOption(label="Gauntlets", description="สนับมือ / หมัด", emoji="🥊"),
+            discord.SelectOption(label="Zui Meng You Chun", description="ร่มสายใหม่", emoji="🌂"),
+            discord.SelectOption(label="Su Zi Xing Yun", description="มีดติดเชือก (แซ่) สายใหม่", emoji="⛓️")
+        ]
+        super().__init__(placeholder="⚔️ เลือกอาวุธหลัก (1 ถึง 2 ชิ้น)...", min_values=1, max_values=2, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        weapons_str = " + ".join(self.values)
+        member_upsert(interaction.user.id, interaction.user.display_name, self.role, weapons_str)
+        
+        try: await self.dashboard_msg.edit(embed=create_member_board_embed())
+        except: pass
+        
+        await interaction.response.edit_message(content=f"✅ ลงทะเบียนสาย **{self.role}** พร้อมอาวุธเรียบร้อย!", view=None, delete_after=5.0)
+
+class MemberRoleSelect(Select):
+    def __init__(self, dashboard_msg):
+        self.dashboard_msg = dashboard_msg
+        options = [
+            discord.SelectOption(label="DPS", description="สายทำดาเมจ", value="DPS", emoji="⚔️"),
+            discord.SelectOption(label="Tank", description="สายป้องกัน", value="Tank", emoji="🛡️"),
+            discord.SelectOption(label="Heal", description="สายสนับสนุน", value="Heal", emoji="🌿"),
+        ]
+        super().__init__(placeholder="เลือกสายตำแหน่งของคุณ...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        role = self.values[0]
+        view = View().add_item(MemberWeaponSelect(role, self.dashboard_msg))
+        await interaction.response.edit_message(content=f"⚔️ **เลือกอาวุธคู่กายประจำตำแหน่ง {role}**", view=view)
+
+class MemberBoardView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        
+    @discord.ui.button(label="📝 ลงทะเบียนตำแหน่ง", style=discord.ButtonStyle.success, row=1, custom_id="member_reg")
+    async def register(self, interaction: discord.Interaction, button: Button):
+        view = View(timeout=60).add_item(MemberRoleSelect(interaction.message))
+        await interaction.response.send_message("👉 **กรุณาเลือกสายตำแหน่งหลักของคุณ:**", view=view, ephemeral=True)
+        
+    @discord.ui.button(label="🔄 รีเฟรช", style=discord.ButtonStyle.secondary, row=1, custom_id="member_ref")
+    async def refresh(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.edit_message(embed=create_member_board_embed())
+
+    @discord.ui.button(label="❌ ลบชื่อออก", style=discord.ButtonStyle.danger, row=1, custom_id="member_leave")
+    async def leave(self, interaction: discord.Interaction, button: Button):
+        member_remove(interaction.user.id)
+        await interaction.response.edit_message(embed=create_member_board_embed())
+        await interaction.followup.send("🗑️ ลบชื่อของคุณออกจากทำเนียบแล้ว", ephemeral=True)
+
+# ==========================================
 # 🔘 DASHBOARD LINK
 # ==========================================
 class DashboardLinkView(discord.ui.View):
@@ -653,11 +818,17 @@ async def on_ready():
     init_db()
     await bot.tree.sync()
     if not auto_reminder.is_running(): auto_reminder.start()
+    
+    # โหลดปุ่มระบบบอร์ดสมาชิก
+    bot.add_view(MemberBoardView())
+    
+    # โหลดปุ่มระบบ Guild War
     conn = sqlite3.connect(DB_NAME)
     rows = conn.execute("SELECT event_id FROM events WHERE active=1").fetchall()
     conn.close()
     for (ev_id,) in rows:
         bot.add_view(PersistentWarView(ev_id))
+        
     print(f'✅ Bot Online: {bot.user}')
 
 @bot.command()
@@ -671,10 +842,78 @@ async def sync(ctx):
 @bot.tree.command(name="setup_war", description="ตั้งค่าตารางวอ (แบบปุ่มกด)")
 async def setup_war(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator: return
-    get_session(interaction.user.id) 
+    get_session(interaction.user.id)
     await interaction.response.send_message(embed=create_setup_embed(interaction.user.id), view=SetupView(), ephemeral=True)
 
-@bot.tree.command(name="check_missing", description="ตามคนขาด (ระบุ Event)")
+@bot.tree.command(name="setup_member_board", description="สร้างตารางบอร์ดทำเนียบสมาชิกกิลด์ (แยกกับตารางวอ)")
+async def setup_member_board(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ เฉพาะแอดมินเท่านั้น", ephemeral=True)
+    
+    embed = create_member_board_embed()
+    view = MemberBoardView()
+    
+    await interaction.response.send_message("กำลังสร้างตารางบอร์ดสมาชิก...", ephemeral=True)
+    msg = await interaction.channel.send(embed=embed, view=view)
+    
+    # 🔥 ให้บอทจำลิงก์ของบอร์ดนี้เก็บไว้ทำปุ่มวาร์ป
+    set_member_board_link(interaction.guild.id, msg.channel.id, msg.id)
+
+@bot.tree.command(name="call_unregistered", description="ตามสมาชิกที่ยังไม่ได้ลงทะเบียนเข้าทำเนียบกิลด์")
+async def call_unregistered(interaction: discord.Interaction, target_role: discord.Role = None):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ เฉพาะแอดมินเท่านั้น", ephemeral=True)
+        
+    conn = sqlite3.connect(DB_NAME)
+    reg_ids = {row[0] for row in conn.execute("SELECT user_id FROM guild_members")}
+    conn.close()
+
+    missing = []
+    targets = target_role.members if target_role else interaction.guild.members
+    for m in targets:
+        if not m.bot and m.id not in reg_ids:
+            missing.append(m.mention)
+
+    if not missing:
+        return await interaction.response.send_message("✅ ยอดเยี่ยม! สมาชิกทุกคนลงทะเบียนในทำเนียบครบแล้ว", ephemeral=True)
+
+    header = f"📢 **กิล天狗 เปิดรับสมัคร จอมยุทธทั้งหลาย** 👺\n"
+    header += f"⚠️ พบสมาชิกที่ยังไม่ได้ลงทะเบียนเข้าทำเนียบกิลด์ **({len(missing)} คน)**:\n"
+    header += f"╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼\n"
+    content = " ".join(missing)
+    footer = f"\n╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼\n👇 **คลิกปุ่มด้านล่างเพื่อวาร์ปไปที่ตารางลงทะเบียนได้เลยครับ**"
+
+    target_ch = interaction.channel
+    
+    # 🔥 ดึงลิงก์ตารางมาสร้างปุ่ม
+    link_data = get_member_board_link()
+    view = discord.ui.View()
+    if link_data:
+        url = f"https://discord.com/channels/{link_data[0]}/{link_data[1]}/{link_data[2]}"
+        view.add_item(discord.ui.Button(label="📍 วาร์ปไปที่ตารางทำเนียบ", style=discord.ButtonStyle.link, url=url))
+
+    try:
+        if len(header + content + footer) > 2000:
+            await target_ch.send(header + " (ส่วนที่ 1)", allowed_mentions=discord.AllowedMentions.none())
+            await target_ch.send(content) 
+            await target_ch.send(footer, view=view, allowed_mentions=discord.AllowedMentions.none())
+        else:
+            await target_ch.send(header + content + footer, view=view)
+            
+        await interaction.response.send_message("✅ ส่งประกาศตามคนลงทะเบียนทำเนียบกิลด์แล้ว", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"Error: {e}", ephemeral=True)
+
+@bot.tree.command(name="reset_member_board", description="ล้างข้อมูลทำเนียบกิลด์ทั้งหมด (รีเซ็ตรายชื่อใหม่)")
+async def reset_member_board(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ เฉพาะแอดมินเท่านั้น", ephemeral=True)
+        
+    clear_all_members()
+    await send_log(interaction.client, "Delete", "ล้างข้อมูลตารางทำเนียบสมาชิกกิลด์ทั้งหมด (Reset)", interaction.user)
+    await interaction.response.send_message("🗑️ **ล้างรายชื่อในทำเนียบกิลด์ทั้งหมดเรียบร้อยแล้ว!**\n*(แอดมินสามารถลบข้อความตารางอันเก่าทิ้งได้เลย แล้วค่อยพิมพ์ `/setup_member_board` เพื่อสร้างตารางใหม่ครับ)*", ephemeral=True)
+
+@bot.tree.command(name="check_missing", description="ตามคนขาด (ระบุ Event สำหรับตารางวอ)")
 @app_commands.autocomplete(event_id=event_autocomplete)
 async def check_missing(interaction: discord.Interaction, event_id: int, target_role: discord.Role = None):
     ev = get_event(event_id)
@@ -719,19 +958,16 @@ async def check_missing(interaction: discord.Interaction, event_id: int, target_
 @bot.tree.command(name="close_war", description="จบงานและปิดตาราง (ระบุ Event)")
 @app_commands.autocomplete(event_id=event_autocomplete)
 async def close_war(interaction: discord.Interaction, event_id: int):
-    # เปลี่ยนสถานะใน DB เป็น 0 (LOCKED)
     close_event_db(event_id)
     ev = get_event(event_id)
     
-    # 🔥 ลบตารางเดิมทิ้งตามคำขอ
     if ev:
         try:
             ch = bot.get_channel(ev[6])
             msg = await ch.fetch_message(ev[7])
-            await msg.delete() # ลบข้อความ Dashboard 
+            await msg.delete()
         except: pass
     
-    # ส่งตารางสรุปแบบล็อคไปห้อง History
     if HISTORY_CHANNEL_ID:
         try:
             hist_ch = bot.get_channel(HISTORY_CHANNEL_ID)
@@ -756,13 +992,13 @@ async def delete_event(interaction: discord.Interaction, event_id: int):
         return await interaction.response.send_message(f"❌ ไม่พบ Event ID: {event_id}", ephemeral=True)
 
     _, title, _, _, _, _, ch_id, msg_id, _ = ev
-    delete_event_db(event_id) 
+    delete_event_db(event_id)
 
     try:
         ch = bot.get_channel(ch_id)
         if ch:
             msg = await ch.fetch_message(msg_id)
-            await msg.delete() 
+            await msg.delete()
     except: pass
 
     await send_log(interaction.client, "Delete", f"ลบ Event #{event_id} ถาวร", interaction.user)
@@ -802,7 +1038,6 @@ async def auto_reminder():
 
             diff = (event_dt - now).total_seconds()
             
-            # 🛠️ เวลาแจ้งเตือน 30 นาที (1740-1800 วินาที)
             if 1740 < diff <= 1800:
                 ch = bot.get_channel(ALERT_CHANNEL_ID_FIXED)
                 if ch: await ch.send(f"📢 **แจ้งเตือน Event #{ev_id}:** อีก 30 นาทีจะเริ่ม **{title}**! @everyone")
