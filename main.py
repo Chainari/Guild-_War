@@ -15,7 +15,7 @@ def bangkok_now():
     return datetime.now(pytz.timezone('Asia/Bangkok'))
 
 # 🔥 ใช้ DB ตัวเดิมได้เลย
-DB_NAME = "guildwar_system_v6_ui.db"
+DB_NAME = "guildwar_system_v11_ui.db"
 
 # 👇 กรุณาตรวจสอบ ID ห้องให้ถูกต้อง
 ALERT_CHANNEL_ID_FIXED = 1444345312188698738
@@ -178,8 +178,8 @@ def get_member_board_link():
 def member_upsert(user_id, username, role, weapons):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute('''INSERT OR REPLACE INTO guild_members
-                (user_id, username, role, weapons, joined_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+    c.execute('''INSERT OR REPLACE INTO guild_members 
+                (user_id, username, role, weapons, joined_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''', 
             (user_id, username, role, weapons))
     conn.commit()
     conn.close()
@@ -299,7 +299,7 @@ def make_visual_bar(dps, tank, heal):
         
     bar = ("🔴" * c_dps) + ("🔵" * c_tank) + ("🟢" * c_heal)
     current_len = c_dps + c_tank + c_heal
-    if current_len < limit: 
+    if current_len < limit:
         bar += "⚫" * (limit - current_len)
     return f"`{bar}`"
 
@@ -347,7 +347,8 @@ def create_dashboard_embed(event_id):
             else: bar = f"[{time_text}]"
             
             num = len(roster[team]["Main"]) + 1
-            display = f"`{num:02}.` {bar} | {emoji} **{username}**"
+            # 🔥 เอากล่องสีเทา ` ` ครอบ {bar} ไว้ตามรูปเป๊ะๆ
+            display = f"`{num:02}.` `{bar}` | {emoji} **{username}**"
             roster[team]["Main"].append(display)
             
         elif is_late:
@@ -957,7 +958,7 @@ async def call_unregistered(interaction: discord.Interaction, target_role: disco
     try:
         if len(header + content + footer) > 2000:
             await target_ch.send(header + " (ส่วนที่ 1)", allowed_mentions=discord.AllowedMentions.none())
-            await target_ch.send(content) 
+            await target_ch.send(content)
             await target_ch.send(footer, view=view, allowed_mentions=discord.AllowedMentions.none())
         else:
             await target_ch.send(header + content + footer, view=view)
