@@ -415,6 +415,7 @@ def create_dashboard_embed(event_id):
     embed.set_footer(text=f"EVENT ID: #{event_id} | STATUS: {status_text} | Last Updated: {bangkok_now().strftime('%H:%M:%S')}")
     return embed
 
+# 🔥 1. แก้ไขดีไซน์ตารางแจ้งลาให้โปร่งและสวยขึ้น (ลดความเบียด)
 def create_leave_board_embed():
     leaves = get_all_leaves()
     short_term = []
@@ -422,16 +423,27 @@ def create_leave_board_embed():
     hiatus = []
     for uid, uname, ltype, dtext, exp, reason, role in leaves:
         role_txt = f" ({role})" if role else ""
-        if ltype == "hiatus": hiatus.append(f"💤 `{uname}{role_txt}` : {reason} [{dtext}]")
-        elif ltype == "late": late_list.append(f"🐢 `{uname}{role_txt}` : {reason} [{dtext}]")
-        else: short_term.append(f"❌ `{uname}{role_txt}` : {reason} [{dtext}]")
+        
+        # จัดฟอร์แมตใหม่ให้มีการเว้นบรรทัดและใส่ Blockquote สวยงาม
+        if ltype == "hiatus": 
+            hiatus.append(f"> 💤 **{uname}**{role_txt}\n> └ 📝 เหตุผล: {reason} `[{dtext}]`")
+        elif ltype == "late": 
+            late_list.append(f"> 🐢 **{uname}**{role_txt}\n> └ ⏰ {dtext} *(เหตุผล: {reason})*")
+        else: 
+            short_term.append(f"> ❌ **{uname}**{role_txt}\n> └ 📝 เหตุผล: {reason} `[{dtext}]`")
             
     embed = discord.Embed(title="📋 บอร์ดแจ้งลาหยุด / พักรบกิลด์ 天狗", description="แอดมินและหัวหน้าหน่วยสามารถเช็ครายชื่อผู้ที่ไม่อยู่ได้ที่นี่\n*(ระบบจะเคลียร์รายชื่อเมื่อหมดเวลาอัตโนมัติ และลิงก์ชื่อเข้าตารางวอให้ทันที)*\n━━━━━━━━━━━━━━━━━━━━━━", color=0x34495e)
-    val_short = "\n".join(short_term) if short_term else "*... ไม่มีผู้ลาระยะสั้น ...*"
-    embed.add_field(name="📅 ลาระยะสั้น (Short-term)", value=val_short, inline=False)
-    if late_list: embed.add_field(name="⏳ แจ้งมาสายล่วงหน้า (Late)", value="\n".join(late_list), inline=False)
-    val_hiatus = "\n".join(hiatus) if hiatus else "*... ไม่มีผู้ลาพักยาว ...*"
-    embed.add_field(name="🛌 ลาพักยาว (Hiatus)", value=val_hiatus, inline=False)
+    
+    # เพิ่ม \n\n เพื่อให้มีช่องไฟระหว่างรายชื่อแต่ละคน และ \n\u200b เพื่อเว้นวรรคหมวดหมู่
+    val_short = "\n\n".join(short_term) if short_term else "> *... ไม่มีผู้ลาระยะสั้น ...*"
+    embed.add_field(name="📅 ลาระยะสั้น (Short-term)", value=val_short + "\n\u200b", inline=False)
+    
+    if late_list:
+        embed.add_field(name="⏳ แจ้งมาสายล่วงหน้า (Late)", value="\n\n".join(late_list) + "\n\u200b", inline=False)
+        
+    val_hiatus = "\n\n".join(hiatus) if hiatus else "> *... ไม่มีผู้ลาพักยาว ...*"
+    embed.add_field(name="🛌 ลาพักยาว (Hiatus)", value=val_hiatus + "\n\u200b", inline=False)
+    
     embed.set_footer(text=f"อัปเดตอัตโนมัติล่าสุด: {bangkok_now().strftime('%d/%m/%Y %H:%M:%S')}")
     return embed
 
@@ -454,7 +466,7 @@ def create_member_board_embed():
     return embed
 
 # ==========================================
-# 🛠️ SETUP SYSTEM (Guild War)
+# 🛠️ SETUP SYSTEM (Guild War - ปรับปรุงระบบโควต้าทีม)
 # ==========================================
 def get_session(user_id):
     if user_id not in setup_sessions:
@@ -510,29 +522,30 @@ class AddTeamModal(Modal, title='เพิ่มทีมใหม่'):
         s['teams'].append({"name": self.team_name.value.strip(), "limit": 0})
         await interaction.response.edit_message(embed=create_setup_embed(interaction.user.id), view=SetupView())
 
-class EditLimitModal(Modal, title='กำหนดจำนวนคนตัวจริง'):
-    def __init__(self, team_index, team_name):
-        super().__init__()
-        self.team_index = team_index
-        self.limit_val = TextInput(label=f'จำกัดโควต้า: {team_name}', placeholder='ใส่ตัวเลข (0 = ไม่จำกัด)', default='0', max_length=3)
-        self.add_item(self.limit_val)
-    async def on_submit(self, interaction: discord.Interaction):
-        s = get_session(interaction.user.id)
-        try: lim = int(self.limit_val.value)
-        except: lim = 0
-        s['teams'][self.team_index]['limit'] = lim
-        await interaction.response.edit_message(embed=create_setup_embed(interaction.user.id), view=SetupView())
-
-class LimitTeamSelect(Select):
+# 🔥 2. แก้ไขระบบจำกัดคนให้แก้ไขทีเดียวทุกทีม
+class MultiLimitModal(Modal, title='กำหนดโควต้าตัวจริง (ทุกทีม)'):
     def __init__(self, user_id):
-        s = get_session(user_id)
-        options = [discord.SelectOption(label=t['name'], value=str(i), description=f"ปัจจุบัน: {'ไม่จำกัด' if t['limit']==0 else f'{t['limit']} คน'}") for i, t in enumerate(s['teams'])]
-        super().__init__(placeholder="เลือกทีมที่ต้องการจำกัดจำนวนคน...", options=options)
-    async def callback(self, interaction: discord.Interaction):
-        idx = int(self.values[0])
-        s = get_session(interaction.user.id)
-        team_name = s['teams'][idx]['name']
-        await interaction.response.send_modal(EditLimitModal(idx, team_name))
+        super().__init__()
+        self.s = get_session(user_id)
+        self.inputs = []
+        # ดึงทีมทั้งหมดมาแสดงในหน้าต่างเดียว (Discord จำกัดสูงสุด 5 ช่อง)
+        for t in self.s['teams'][:5]:
+            inp = TextInput(
+                label=f"โควต้า: {t['name']}", 
+                placeholder='ใส่ตัวเลข (0 = ไม่จำกัด)', 
+                default=str(t['limit']), 
+                max_length=3,
+                required=True
+            )
+            self.add_item(inp)
+            self.inputs.append(inp)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        for i, inp in enumerate(self.inputs):
+            try: lim = int(inp.value)
+            except: lim = 0
+            self.s['teams'][i]['limit'] = lim
+        await interaction.response.edit_message(embed=create_setup_embed(interaction.user.id), view=SetupView())
 
 class DatePickerView(View):
     def __init__(self):
@@ -589,10 +602,15 @@ class SetupView(View):
     @discord.ui.button(label="👥 เพิ่มทีม", style=discord.ButtonStyle.success, row=2)
     async def add_team(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(AddTeamModal())
-    @discord.ui.button(label="⚙️ กำหนดคนแต่ละทีม", style=discord.ButtonStyle.primary, row=2)
+        
+    @discord.ui.button(label="⚙️ กำหนดโควต้า", style=discord.ButtonStyle.primary, row=2)
     async def set_limit(self, interaction: discord.Interaction, button: Button):
-        view = View().add_item(LimitTeamSelect(interaction.user.id))
-        await interaction.response.send_message("👇 **เลือกทีมที่ต้องการกำหนดโควต้าตัวจริง:**", view=view, ephemeral=True)
+        s = get_session(interaction.user.id)
+        if not s['teams']:
+            return await interaction.response.send_message("❌ ยังไม่มีทีม กรุณาเพิ่มทีมก่อน", ephemeral=True)
+        # กดปุ่มนี้แล้ว Modal เด้งขึ้นมาให้ปรับทุกทีมพร้อมกันเลย
+        await interaction.response.send_modal(MultiLimitModal(interaction.user.id))
+        
     @discord.ui.button(label="➖ ลบทีมล่าสุด", style=discord.ButtonStyle.danger, row=2)
     async def remove_team(self, interaction: discord.Interaction, button: Button):
         s = get_session(interaction.user.id)
@@ -1046,9 +1064,6 @@ async def reset_member_board(interaction: discord.Interaction):
     await send_log(interaction.client, "Delete", "ล้างข้อมูลตารางทำเนียบสมาชิกกิลด์ทั้งหมด (Reset)", interaction.user)
     await interaction.response.send_message("🗑️ **ล้างรายชื่อในทำเนียบกิลด์ทั้งหมดเรียบร้อยแล้ว!**", ephemeral=True)
 
-# ==========================================
-# 🟢 คำสั่งที่กลับมาแล้ว: /check_missing
-# ==========================================
 @bot.tree.command(name="check_missing", description="ตามคนขาด (ระบุ Event สำหรับตารางวอ)")
 @app_commands.autocomplete(event_id=event_autocomplete)
 async def check_missing(interaction: discord.Interaction, event_id: int, target_role: discord.Role = None):
@@ -1090,9 +1105,6 @@ async def check_missing(interaction: discord.Interaction, event_id: int, target_
             await interaction.response.send_message(f"✅ ส่งประกาศตามคนขาด Event #{event_id} แล้ว", ephemeral=True)
         except Exception as e: pass
 
-# ==========================================
-# 🔴 ระบบจบงาน (Close War)
-# ==========================================
 @bot.tree.command(name="close_war", description="จบงานและปิดตาราง (ระบุ Event)")
 @app_commands.autocomplete(event_id=event_autocomplete)
 async def close_war(interaction: discord.Interaction, event_id: int):
