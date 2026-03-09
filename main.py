@@ -231,7 +231,7 @@ def leave_remove(user_id):
 def get_all_leaves():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute('''SELECT l.user_id, l.username, l.leave_type, l.date_text, l.expiry_date, l.reason, m.role
+    c.execute('''SELECT l.user_id, l.username, l.leave_type, l.date_text, l.expiry_date, l.reason, m.role 
                 FROM leave_records l
                 LEFT JOIN guild_members m ON l.user_id = m.user_id
                 ORDER BY l.posted_at ASC''')
@@ -377,14 +377,13 @@ def create_dashboard_embed(event_id):
             parsed_limits[t_str] = 0
 
     data = get_roster(event_id)
-    event_users = {p[0] for p in data} # ID ของคนที่กดลงชื่อในตารางนี้แล้ว
+    event_users = {p[0] for p in data}
 
     stats = {t: {"DPS":0, "Tank":0, "Heal":0, "Total":0} for t in parsed_teams}
     roster = {t: {"Main": [], "Late": [], "Standby": []} for t in parsed_teams}
     absence_list = []
-    pre_late_list = [] # สำหรับหมวดแจ้งสายล่วงหน้า
+    pre_late_list = []
     
-    # 1. ประมวลผลคนที่กดลงชื่อในตาราง
     for user_id, username, team, role, time_text, weapons in data:
         if team == "Absence":
             absence_list.append(f"❌ `{username}` : {role} [{time_text}]")
@@ -422,10 +421,10 @@ def create_dashboard_embed(event_id):
         elif is_standby:
             roster[team]["Standby"].append(f"💤zZ **{username}** [Standby]")
 
-    # 🔥 2. ระบบ CROSS-SYNC: ดึงข้อมูลจาก Board ลา/สาย มาแสดง
+    # CROSS-SYNC 
     active_leaves = get_all_leaves()
     for l_uid, l_uname, l_type, l_dtext, l_exp, l_reason, l_role in active_leaves:
-        if l_uid not in event_users: # ดึงมาเฉพาะคนที่ "ยังไม่ได้กดลงชื่อ" ในตารางนี้
+        if l_uid not in event_users: 
             role_txt = f" ({l_role})" if l_role else ""
             if l_type == 'late':
                 pre_late_list.append(f"🐢 `{l_uname}{role_txt}` : {l_dtext} - {l_reason}")
@@ -485,7 +484,7 @@ def create_leave_board_embed():
     val_short = "\n".join(short_term) if short_term else "*... ไม่มีผู้ลาระยะสั้น ...*"
     embed.add_field(name="📅 ลาระยะสั้น (Short-term)", value=val_short, inline=False)
     
-    if late_list: # โชว์หมวดมาสายเฉพาะตอนที่มีคนกด
+    if late_list:
         embed.add_field(name="⏳ แจ้งมาสายล่วงหน้า (Late)", value="\n".join(late_list), inline=False)
         
     val_hiatus = "\n".join(hiatus) if hiatus else "*... ไม่มีผู้ลาพักยาว ...*"
@@ -513,6 +512,14 @@ def create_member_board_embed():
         embed.add_field(name=f"{role_title} ({len(members_list)} คน)", value=val, inline=False)
     embed.set_footer(text=f"อัปเดตล่าสุด: {bangkok_now().strftime('%d/%m/%Y %H:%M')}")
     return embed
+
+# ==========================================
+# 🤖 BOT INITIALIZATION
+# ==========================================
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ==========================================
 # 🛠️ SETUP SYSTEM (Guild War)
@@ -728,7 +735,6 @@ class RegistrationView(discord.ui.View):
         final_status = status
         alert_msg = "✅ **บันทึกข้อมูลเรียบร้อยแล้ว! (ข้อมูลอัปเดตลงตารางแล้ว)**"
         
-        # ถ้าตัวจริงเต็ม ปัดเป็นสำรอง
         if limit > 0 and "Late" not in final_status and "Standby" not in final_status:
             conn = sqlite3.connect(DB_NAME)
             c = conn.cursor()
@@ -984,39 +990,9 @@ class LeaveBoardView(View):
     async def ref_leave(self, interaction: discord.Interaction, button: Button):
         await interaction.response.edit_message(embed=create_leave_board_embed())
 
-@bot.tree.command(name="setup_leave_board", description="สร้างบอร์ดแจ้งลาถาวร (Leave Board)")
-async def setup_leave_board(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator: return
-    embed = create_leave_board_embed()
-    view = LeaveBoardView()
-    await interaction.response.send_message("กำลังสร้างบอร์ดแจ้งลา...", ephemeral=True)
-    msg = await interaction.channel.send(embed=embed, view=view)
-    set_bot_config('leave_board', interaction.guild.id, msg.channel.id, msg.id)
-
 # ==========================================
-# 🤖 BOT COMMANDS / MEMBER BOARD
+# 💻 BOT COMMANDS & EVENTS (แก้การจัดเรียงแล้ว)
 # ==========================================
-class MemberBoardView(View):
-    def __init__(self): super().__init__(timeout=None)
-    @discord.ui.button(label="📝 ลงทะเบียน / แก้ไขตำแหน่ง", style=discord.ButtonStyle.success, row=1, custom_id="member_reg")
-    async def register(self, interaction: discord.Interaction, button: Button):
-        view = View(timeout=60).add_item(MemberRoleSelect(interaction.message))
-        await interaction.response.send_message("👉 **กรุณาเลือกสายตำแหน่งหลักของคุณ:**", view=view, ephemeral=True)
-    @discord.ui.button(label="🔄 รีเฟรช", style=discord.ButtonStyle.secondary, row=1, custom_id="member_ref")
-    async def refresh(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.edit_message(embed=create_member_board_embed())
-    @discord.ui.button(label="❌ ลบชื่อออก", style=discord.ButtonStyle.danger, row=1, custom_id="member_leave")
-    async def leave(self, interaction: discord.Interaction, button: Button):
-        member_remove(interaction.user.id)
-        await interaction.response.edit_message(embed=create_member_board_embed())
-        await interaction.followup.send("🗑️ ลบชื่อของคุณออกจากทำเนียบแล้ว", ephemeral=True)
-
-@bot.tree.command(name="setup_member_board", description="สร้างตารางบอร์ดทำเนียบสมาชิกกิลด์")
-async def setup_member_board(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator: return
-    msg = await interaction.channel.send(embed=create_member_board_embed(), view=MemberBoardView())
-    set_bot_config('member_board', interaction.guild.id, msg.channel.id, msg.id)
-    await interaction.response.send_message("✅ สร้างตารางสำเร็จ", ephemeral=True)
 
 @bot.event
 async def on_ready():
@@ -1040,6 +1016,187 @@ async def sync(ctx):
     if ctx.author.guild_permissions.administrator:
         synced = await bot.tree.sync()
         await ctx.send(f"✅ Synced {len(synced)} commands เรียบร้อย!")
+
+@bot.tree.command(name="setup_war", description="ตั้งค่าตารางวอ (แบบปุ่มกด)")
+async def setup_war(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator: return
+    get_session(interaction.user.id)
+    await interaction.response.send_message(embed=create_setup_embed(interaction.user.id), view=SetupView(), ephemeral=True)
+
+@bot.tree.command(name="setup_leave_board", description="สร้างบอร์ดแจ้งลาถาวร (Leave Board)")
+async def setup_leave_board(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator: return
+    embed = create_leave_board_embed()
+    view = LeaveBoardView()
+    await interaction.response.send_message("กำลังสร้างบอร์ดแจ้งลา...", ephemeral=True)
+    msg = await interaction.channel.send(embed=embed, view=view)
+    set_bot_config('leave_board', interaction.guild.id, msg.channel.id, msg.id)
+
+@bot.tree.command(name="setup_member_board", description="สร้างตารางบอร์ดทำเนียบสมาชิกกิลด์")
+async def setup_member_board(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator: return
+    msg = await interaction.channel.send(embed=create_member_board_embed(), view=MemberBoardView())
+    set_bot_config('member_board', interaction.guild.id, msg.channel.id, msg.id)
+    await interaction.response.send_message("✅ สร้างตารางสำเร็จ", ephemeral=True)
+
+@bot.tree.command(name="call_unregistered", description="ตามสมาชิกที่ยังไม่ได้ลงทะเบียนเข้าทำเนียบกิลด์")
+async def call_unregistered(interaction: discord.Interaction, target_role: discord.Role = None):
+    if not interaction.user.guild_permissions.administrator: return
+    conn = sqlite3.connect(DB_NAME)
+    reg_ids = {row[0] for row in conn.execute("SELECT user_id FROM guild_members")}
+    conn.close()
+
+    missing = []
+    targets = target_role.members if target_role else interaction.guild.members
+    for m in targets:
+        if not m.bot and m.id not in reg_ids:
+            missing.append(m.mention)
+
+    if not missing:
+        return await interaction.response.send_message("✅ ยอดเยี่ยม! สมาชิกทุกคนลงทะเบียนในทำเนียบครบแล้ว", ephemeral=True)
+
+    header = f"📢 **กิล天狗 เปิดรับสมัคร จอมยุทธทั้งหลาย** 👺\n"
+    header += f"⚠️ พบสมาชิกที่ยังไม่ได้ลงทะเบียนเข้าทำเนียบกิลด์ **({len(missing)} คน)**:\n"
+    header += f"╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼\n"
+    content = " ".join(missing)
+    footer = f"\n╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼\n👇 **คลิกปุ่มด้านล่างเพื่อวาร์ปไปที่ตารางลงทะเบียนได้เลยครับ**"
+
+    target_ch = interaction.channel
+    link_data = get_member_board_link()
+    view = discord.ui.View()
+    if link_data:
+        url = f"https://discord.com/channels/{link_data[0]}/{link_data[1]}/{link_data[2]}"
+        view.add_item(discord.ui.Button(label="📍 วาร์ปไปที่ตารางทำเนียบ", style=discord.ButtonStyle.link, url=url))
+
+    try:
+        if len(header + content + footer) > 2000:
+            await target_ch.send(header + " (ส่วนที่ 1)", allowed_mentions=discord.AllowedMentions.none())
+            await target_ch.send(content) 
+            await target_ch.send(footer, view=view, allowed_mentions=discord.AllowedMentions.none())
+        else:
+            await target_ch.send(header + content + footer, view=view)
+        await interaction.response.send_message("✅ ส่งประกาศตามคนลงทะเบียนทำเนียบกิลด์แล้ว", ephemeral=True)
+    except Exception as e: pass
+
+@bot.tree.command(name="reset_member_board", description="ล้างข้อมูลทำเนียบกิลด์ทั้งหมด (รีเซ็ตรายชื่อใหม่)")
+async def reset_member_board(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator: return
+    clear_all_members()
+    await send_log(interaction.client, "Delete", "ล้างข้อมูลตารางทำเนียบสมาชิกกิลด์ทั้งหมด (Reset)", interaction.user)
+    await interaction.response.send_message("🗑️ **ล้างรายชื่อในทำเนียบกิลด์ทั้งหมดเรียบร้อยแล้ว!**", ephemeral=True)
+
+@bot.tree.command(name="check_missing", description="ตามคนขาด (ระบุ Event สำหรับตารางวอ)")
+@app_commands.autocomplete(event_id=event_autocomplete)
+async def check_missing(interaction: discord.Interaction, event_id: int, target_role: discord.Role = None):
+    ev = get_event(event_id)
+    if not ev: return await interaction.response.send_message("❌ ไม่พบ Event ID นี้", ephemeral=True)
+    _, title, date_str, time_str, _, _, ch_id, msg_id, active = ev[:9]
+
+    conn = sqlite3.connect(DB_NAME)
+    reg_ids = {row[0] for row in conn.execute("SELECT user_id FROM registrations WHERE event_id=?", (event_id,))}
+    conn.close()
+
+    missing = []
+    targets = target_role.members if target_role else interaction.guild.members
+    for m in targets:
+        if not m.bot and m.id not in reg_ids: missing.append(m.mention)
+
+    target_ch = bot.get_channel(ALERT_CHANNEL_ID_FIXED) or interaction.channel
+    
+    if not missing:
+        await interaction.response.send_message("✅ ครบแล้ว!", ephemeral=True)
+    else:
+        view = DashboardLinkView(interaction.guild.id, ch_id, msg_id)
+        full_date_text = format_full_date(date_str)
+        header = f"⚔️ **MISSING ROSTER: {title}** ⚔️\n"
+        header += f"📅 **Date:** {full_date_text} | ⏰ **Time:** {time_str}\n"
+        header += f"🆔 **Event ID:** #{event_id}\n"
+        header += f"⚠️ สมาชิกที่ยังไม่ลงชื่อ **({len(missing)} คน)**:\n"
+        header += f"╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼\n"
+        content = " ".join(missing)
+        footer = f"\n╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼\n👇 **กดปุ่มด้านล่างเพื่อไปที่ห้องลงชื่อ (Dashboard) ได้เลยครับ**"
+
+        try:
+            if len(header+content+footer) > 2000:
+                await target_ch.send(header + " (ส่วนที่ 1)", allowed_mentions=discord.AllowedMentions.none())
+                await target_ch.send(" ".join(missing), allowed_mentions=discord.AllowedMentions.none())
+                await target_ch.send(footer, view=view, allowed_mentions=discord.AllowedMentions.none())
+            else:
+                await target_ch.send(header+content+footer, view=view, allowed_mentions=discord.AllowedMentions.none())
+            await interaction.response.send_message(f"✅ ส่งประกาศตามคนขาด Event #{event_id} แล้ว", ephemeral=True)
+        except Exception as e: pass
+
+@bot.tree.command(name="close_war", description="จบงานและปิดตาราง (ระบุ Event)")
+@app_commands.autocomplete(event_id=event_autocomplete)
+async def close_war(interaction: discord.Interaction, event_id: int):
+    close_event_db(event_id)
+    ev = get_event(event_id)
+    if not ev: return await interaction.response.send_message("❌ ไม่พบ Event ID นี้", ephemeral=True)
+
+    data = get_roster(event_id)
+    total_players = len([p for p in data if p[2] != "Absence"])
+    
+    try:
+        ch = bot.get_channel(ev[6])
+        msg = await ch.fetch_message(ev[7])
+        await msg.delete()
+    except: pass
+    
+    if HISTORY_CHANNEL_ID:
+        try:
+            hist_ch = bot.get_channel(HISTORY_CHANNEL_ID)
+            if hist_ch:
+                date_obj = parse_event_datetime(ev[2], ev[3])
+                date_display = date_obj.strftime("%Y-%m-%d") if date_obj else ev[2]
+                
+                embed = discord.Embed(color=0x2b2d31)
+                desc = f"## 🔴 จบวอแล้ว: {ev[1]}\n\n"
+                desc += f"✅ **บันทึกข้อมูลเรียบร้อย**\n"
+                desc += f"📅 **วันที่:** {date_display}\n"
+                desc += f"👤 **จำนวนคน:** {total_players} คน\n\n"
+                desc += "**System Closed.**"
+                embed.description = desc
+                await hist_ch.send(embed=embed)
+        except: pass
+
+    await send_log(interaction.client, "Close", f"ปิดงาน Event #{event_id} และลบตารางแล้ว", interaction.user)
+    await interaction.response.send_message(f"🔴 ปิดงาน Event #{event_id} และลบตารางออกจากห้องเรียบร้อย", ephemeral=True)
+
+@bot.tree.command(name="delete_event", description="ลบตารางและข้อมูลทั้งหมด (ระบุ Event)")
+@app_commands.autocomplete(event_id=event_autocomplete)
+async def delete_event(interaction: discord.Interaction, event_id: int):
+    if not interaction.user.guild_permissions.administrator: return
+    ev = get_event(event_id)
+    if not ev: return
+    delete_event_db(event_id)
+
+    try:
+        ch = bot.get_channel(ev[6])
+        if ch:
+            msg = await ch.fetch_message(msg_id)
+            await msg.delete()
+    except: pass
+
+    await send_log(interaction.client, "Delete", f"ลบ Event #{event_id} ถาวร", interaction.user)
+    await interaction.response.send_message(f"🗑️ **ลบข้อมูล Event #{event_id} เรียบร้อยแล้ว!**", ephemeral=True)
+
+@bot.tree.command(name="leaderboard", description="ดูอันดับการเข้าวอ")
+async def leaderboard(interaction: discord.Interaction):
+    data = db_get_leaderboard()
+    if not data: return await interaction.response.send_message("❌ ยังไม่มีข้อมูล", ephemeral=True)
+    embed = discord.Embed(title="🏆 Guild War Leaderboard", color=discord.Color.gold())
+    desc = ""
+    for i, (name, count) in enumerate(data):
+        medal = "🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else f"#{i+1}"
+        desc += f"{medal} **{name}** : {count} ครั้ง\n"
+    embed.description = desc
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="shutdown", description="ปิดบอท")
+async def shutdown(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator: return
+    await interaction.response.send_message("👋 Bye", ephemeral=True)
+    await bot.close()
 
 # --- TASKS (Auto-Reminder & Auto-Clear Leave) ---
 @tasks.loop(minutes=1)
