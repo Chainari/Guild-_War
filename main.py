@@ -24,7 +24,7 @@ HISTORY_CHANNEL_ID = 1472149894096621639
 setup_sessions = {}
 
 # ==========================================
-# 🗄️ DATABASE SYSTEM (โค้ดฐานข้อมูลเดิมทั้งหมด)
+# 🗄️ DATABASE SYSTEM
 # ==========================================
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -288,6 +288,12 @@ async def event_autocomplete(interaction: discord.Interaction, current: str) -> 
             choices.append(app_commands.Choice(name=display_name, value=eid))
     return choices[:25]
 
+class DashboardLinkView(discord.ui.View):
+    def __init__(self, guild_id, channel_id, message_id):
+        super().__init__(timeout=None)
+        url = f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+        self.add_item(discord.ui.Button(label="📍 ไปที่ห้องลงชื่อ", style=discord.ButtonStyle.link, url=url))
+
 # ==========================================
 # 📊 GENERATORS (Dashboard & Leave Board)
 # ==========================================
@@ -448,7 +454,7 @@ def create_member_board_embed():
     return embed
 
 # ==========================================
-# 🛠️ SETUP SYSTEM (Guild War - แยกระบบเพิ่มทีมและจำกัดคน)
+# 🛠️ SETUP SYSTEM (Guild War)
 # ==========================================
 def get_session(user_id):
     if user_id not in setup_sessions:
@@ -494,7 +500,6 @@ class ConfigModal(Modal, title='แก้ไขข้อมูล'):
         elif self.mode == 'date_manual': s['date'] = val
         await interaction.response.edit_message(embed=create_setup_embed(interaction.user.id), view=SetupView())
 
-# แบบฟอร์มเพิ่มทีม (เอาช่องกรอกโควต้าออก)
 class AddTeamModal(Modal, title='เพิ่มทีมใหม่'):
     def __init__(self):
         super().__init__()
@@ -505,7 +510,6 @@ class AddTeamModal(Modal, title='เพิ่มทีมใหม่'):
         s['teams'].append({"name": self.team_name.value.strip(), "limit": 0})
         await interaction.response.edit_message(embed=create_setup_embed(interaction.user.id), view=SetupView())
 
-# แบบฟอร์มจำกัดคน (สำหรับแต่ละทีม)
 class EditLimitModal(Modal, title='กำหนดจำนวนคนตัวจริง'):
     def __init__(self, team_index, team_name):
         super().__init__()
@@ -839,7 +843,7 @@ class AbsenceModal(Modal, title='แบบฟอร์มแจ้งลา (เ
         await interaction.response.send_message("🏳️ บันทึกใบลาสำหรับวอรอบนี้เรียบร้อย", ephemeral=True)
 
 # ==========================================
-# 🛌 LEAVE BOARD SYSTEM (บอร์ดแจ้งลาถาวร)
+# 🛌 LEAVE BOARD SYSTEM
 # ==========================================
 class LeaveReasonModal(Modal, title='แบบฟอร์มแจ้งลา / แจ้งสาย'):
     def __init__(self, leave_type):
@@ -1043,7 +1047,51 @@ async def reset_member_board(interaction: discord.Interaction):
     await interaction.response.send_message("🗑️ **ล้างรายชื่อในทำเนียบกิลด์ทั้งหมดเรียบร้อยแล้ว!**", ephemeral=True)
 
 # ==========================================
-# 🔴 ระบบจบงาน (Close War) ปรับปรุงใหม่
+# 🟢 คำสั่งที่กลับมาแล้ว: /check_missing
+# ==========================================
+@bot.tree.command(name="check_missing", description="ตามคนขาด (ระบุ Event สำหรับตารางวอ)")
+@app_commands.autocomplete(event_id=event_autocomplete)
+async def check_missing(interaction: discord.Interaction, event_id: int, target_role: discord.Role = None):
+    ev = get_event(event_id)
+    if not ev: return await interaction.response.send_message("❌ ไม่พบ Event ID นี้", ephemeral=True)
+    _, title, date_str, time_str, _, _, ch_id, msg_id, active = ev[:9]
+
+    conn = sqlite3.connect(DB_NAME)
+    reg_ids = {row[0] for row in conn.execute("SELECT user_id FROM registrations WHERE event_id=?", (event_id,))}
+    conn.close()
+
+    missing = []
+    targets = target_role.members if target_role else interaction.guild.members
+    for m in targets:
+        if not m.bot and m.id not in reg_ids: missing.append(m.mention)
+
+    target_ch = bot.get_channel(ALERT_CHANNEL_ID_FIXED) or interaction.channel
+    
+    if not missing:
+        await interaction.response.send_message("✅ ครบแล้ว!", ephemeral=True)
+    else:
+        view = DashboardLinkView(interaction.guild.id, ch_id, msg_id)
+        full_date_text = format_full_date(date_str)
+        header = f"⚔️ **MISSING ROSTER: {title}** ⚔️\n"
+        header += f"📅 **Date:** {full_date_text} | ⏰ **Time:** {time_str}\n"
+        header += f"🆔 **Event ID:** #{event_id}\n"
+        header += f"⚠️ สมาชิกที่ยังไม่ลงชื่อ **({len(missing)} คน)**:\n"
+        header += f"╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼\n"
+        content = " ".join(missing)
+        footer = f"\n╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼╼\n👇 **กดปุ่มด้านล่างเพื่อไปที่ห้องลงชื่อได้เลยครับ**"
+
+        try:
+            if len(header+content+footer) > 2000:
+                await target_ch.send(header + " (ส่วนที่ 1)", allowed_mentions=discord.AllowedMentions.none())
+                await target_ch.send(" ".join(missing), allowed_mentions=discord.AllowedMentions.none())
+                await target_ch.send(footer, view=view, allowed_mentions=discord.AllowedMentions.none())
+            else:
+                await target_ch.send(header+content+footer, view=view, allowed_mentions=discord.AllowedMentions.none())
+            await interaction.response.send_message(f"✅ ส่งประกาศตามคนขาด Event #{event_id} แล้ว", ephemeral=True)
+        except Exception as e: pass
+
+# ==========================================
+# 🔴 ระบบจบงาน (Close War)
 # ==========================================
 @bot.tree.command(name="close_war", description="จบงานและปิดตาราง (ระบุ Event)")
 @app_commands.autocomplete(event_id=event_autocomplete)
@@ -1052,15 +1100,12 @@ async def close_war(interaction: discord.Interaction, event_id: int):
     ev = get_event(event_id)
     if not ev: return await interaction.response.send_message("❌ ไม่พบ Event ID นี้", ephemeral=True)
 
-    # 1. ปิด Event ในฐานข้อมูล
     close_event_db(event_id)
     
-    # 2. สร้าง Embed แบบเต็มหลอดสวยๆ (สำหรับส่งไปห้อง History)
     detailed_history_embed = create_dashboard_embed(event_id)
     detailed_history_embed.title = f"📜 สรุปยอดวอ (Event #{event_id}) - จบงาน"
-    detailed_history_embed.color = 0x2b2d31 # สีเทาดำ
+    detailed_history_embed.color = 0x2b2d31
 
-    # 3. สร้าง Embed แบบมินิมอล (สำหรับอัปเดตทับตารางเดิมในห้องแจ้งวอ)
     data = get_roster(event_id)
     total_players = len([p for p in data if p[2] != "Absence"])
     date_obj = parse_event_datetime(ev[2], ev[3])
@@ -1075,7 +1120,6 @@ async def close_war(interaction: discord.Interaction, event_id: int):
         f"**System Closed.**"
     )
 
-    # 4. อัปเดตตารางเก่าให้กลายเป็นแบบมินิมอล และเอาปุ่มออกทั้งหมด
     try:
         ch = bot.get_channel(ev[6])
         if ch:
@@ -1083,12 +1127,10 @@ async def close_war(interaction: discord.Interaction, event_id: int):
             await msg.edit(embed=minimal_closed_embed, view=None)
     except: pass
     
-    # 5. ส่งแบบละเอียดไปที่ห้อง History
     if HISTORY_CHANNEL_ID:
         try:
             hist_ch = bot.get_channel(HISTORY_CHANNEL_ID)
-            if hist_ch:
-                await hist_ch.send(embed=detailed_history_embed)
+            if hist_ch: await hist_ch.send(embed=detailed_history_embed)
         except: pass
 
     await send_log(interaction.client, "Close", f"ปิดงาน Event #{event_id} และส่งประวัติแล้ว", interaction.user)
@@ -1128,7 +1170,7 @@ async def shutdown(interaction: discord.Interaction):
     await interaction.response.send_message("👋 Bye", ephemeral=True)
     await bot.close()
 
-# --- TASKS (Auto-Reminder & Auto-Clear Leave) ---
+# --- TASKS ---
 @tasks.loop(minutes=1)
 async def auto_reminder():
     now = bangkok_now()
