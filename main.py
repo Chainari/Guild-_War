@@ -31,14 +31,8 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS events
                 (event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT,
-                date_str TEXT,
-                time_str TEXT,
-                teams TEXT,
-                color INTEGER DEFAULT 3447003,
-                channel_id INTEGER,
-                message_id INTEGER,
-                active INTEGER DEFAULT 1)''')
+                title TEXT, date_str TEXT, time_str TEXT, teams TEXT,
+                color INTEGER DEFAULT 3447003, channel_id INTEGER, message_id INTEGER, active INTEGER DEFAULT 1)''')
     try: c.execute("ALTER TABLE events ADD COLUMN team_limit INTEGER DEFAULT 0")
     except: pass
     c.execute('''CREATE TABLE IF NOT EXISTS registrations
@@ -48,7 +42,7 @@ def init_db():
     try: c.execute("ALTER TABLE guild_members ADD COLUMN weapons TEXT")
     except: pass
     c.execute('''CREATE TABLE IF NOT EXISTS bot_config
-                (config_name TEXT PRIMARY KEY, guild_id INTEGER, channel_id INTEGER, message_id INTEGER)''')
+                 (config_name TEXT PRIMARY KEY, guild_id INTEGER, channel_id INTEGER, message_id INTEGER)''')
     c.execute('''CREATE TABLE IF NOT EXISTS leave_records
                 (user_id INTEGER PRIMARY KEY, username TEXT, leave_type TEXT, date_text TEXT, expiry_date DATETIME, reason TEXT, posted_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
@@ -297,23 +291,17 @@ class DashboardLinkView(discord.ui.View):
 # ==========================================
 # 📊 GENERATORS (Dashboard & Leave Board)
 # ==========================================
-def make_visual_bar(dps, tank, heal):
-    total = dps + tank + heal
-    limit = 10
-    if total == 0: return "⚫" * limit
-    if total <= limit:
-        c_dps = dps
-        c_tank = tank
-        c_heal = heal
-    else:
-        c_dps = int((dps / total) * limit)
-        c_tank = int((tank / total) * limit)
-        c_heal = limit - (c_dps + c_tank)
-    bar = ("🔴" * c_dps) + ("🔵" * c_tank) + ("🟢" * c_heal)
-    current_len = c_dps + c_tank + c_heal
-    if current_len < limit: 
-        bar += "⚫" * (limit - current_len)
-    return f"`{bar}`"
+def make_visual_bar(total, limit_val):
+    limit = limit_val if limit_val > 0 else 10
+    c = min(total, limit)
+    if limit_val == 0:
+        c = min(total, 10)
+        return f"`{'🟢'*c}{'⚫'*(10-c)}`"
+    
+    ratio = total / limit
+    dots = int(ratio * 10)
+    dots = min(dots, 10)
+    return f"`{'🟢'*dots}{'⚫'*(10-dots)}`"
 
 def create_dashboard_embed(event_id):
     event = get_event(event_id)
@@ -334,46 +322,48 @@ def create_dashboard_embed(event_id):
     data = get_roster(event_id)
     event_users = {p[0] for p in data}
 
-    stats = {t: {"DPS":0, "Tank":0, "Heal":0, "Total":0} for t in parsed_teams}
-    roster = {t: {"Main": [], "Late": [], "Standby": []} for t in parsed_teams}
+    stats = {t: {"Commander":0, "Healer":0, "Fighter":0, "Total":0} for t in parsed_teams}
+    roster = {t: {"Commander": [], "Healer": [], "Fighter": [], "Late": [], "Standby": []} for t in parsed_teams}
     absence_list = []
     pre_late_list = []
     
-    for user_id, username, team, role, time_text, weapons in data:
-        if team == "Absence":
-            absence_list.append(f"❌ `{username}` : {role} [{time_text}]")
+    for user_id, username, p_team, role, p_time, weapons in data:
+        if p_team == "Absence":
+            absence_list.append(f"❌ `{username}` : {role} [{p_time}]")
             continue
-        if team not in stats: continue
-        
-        is_late = "Late" in time_text or "🐢" in time_text
-        is_standby = "Standby" in time_text or "💤" in time_text
+            
+        is_late = "Late" in p_time or "🐢" in p_time
+        is_standby = "Standby" in p_time or "💤" in p_time
         is_main = not (is_late or is_standby)
         
-        if is_main:
-            stats[team]["Total"] += 1
-            if role in stats[team]: stats[team][role] += 1
+        for t in parsed_teams:
+            # Check if this team (round) is part of user's selected rounds
+            if t not in p_team: continue
             
-        emoji = "🛡️" if "Tank" in role else "⚔️" if "DPS" in role else "🌿"
-        
-        if is_main:
-            on, off = "🟢", "⚫"
-            if "Full Time" in time_text: bar = f"{on*4} {on*4}"
-            elif "Round" in time_text:
-                rounds_visual = []
-                for i in range(1, 9):
-                    if f"Round {i}" in time_text: rounds_visual.append(on)
-                    else: rounds_visual.append(off)
-                bar = "".join(rounds_visual[:4]) + " " + "".join(rounds_visual[4:])
-            else: bar = f"[{time_text}]"
+            if is_main:
+                stats[t]["Total"] += 1
+                if role == "Commander": stats[t]["Commander"] += 1
+                elif role == "Healer": stats[t]["Healer"] += 1
+                else: stats[t]["Fighter"] += 1
+                
+            emoji = "👑" if role == "Commander" else "🌿" if role == "Healer" else "🛡️" if role == "Tank" else "⚔️"
             
-            num = len(roster[team]["Main"]) + 1
-            display = f"`> {num:02}.` `{bar}` | {emoji} **{username}**"
-            roster[team]["Main"].append(display)
-            
-        elif is_late:
-            roster[team]["Late"].append(f"🐢 **{username}** [Late]")
-        elif is_standby:
-            roster[team]["Standby"].append(f"💤zZ **{username}** [Standby]")
+            if is_main:
+                on, off = "🟢", "⚫"
+                if "Full" in p_time: bar = f"{on*4} {on*4}"
+                else: bar = f"[{p_time}]"
+                
+                num = len(roster[t]["Commander"]) + len(roster[t]["Healer"]) + len(roster[t]["Fighter"]) + 1
+                display = f"`> {num:02}.` `{bar}` | {emoji} **{username}**"
+                
+                if role == "Commander": roster[t]["Commander"].append(display)
+                elif role == "Healer": roster[t]["Healer"].append(display)
+                else: roster[t]["Fighter"].append(display)
+                
+            elif is_late:
+                roster[t]["Late"].append(f"🐢 **{username}** [Late]")
+            elif is_standby:
+                roster[t]["Standby"].append(f"💤zZ **{username}** [Standby]")
 
     active_leaves = get_all_leaves()
     for l_uid, l_uname, l_type, l_dtext, l_exp, l_reason, l_role in active_leaves:
@@ -388,23 +378,38 @@ def create_dashboard_embed(event_id):
     final_color = color_val if active else 0xff2e4c
     full_date_text = format_full_date(date_str)
     
-    desc = f"```ansi\n\u001b[0;33m# ⏰ START: {time_str} น.\u001b[0m```\n📅 **Date:** {full_date_text}\n-------------------------"
+    desc = f"```ansi\n\u001b[0;33m# ⏰ START: {time_str} น.\u001b[0m
+```\n📅 **Date:** {full_date_text}\n-------------------------"
     embed = discord.Embed(title=f"⚔️ {title}", description=desc, color=final_color)
     
     for t in parsed_teams:
         s = stats[t]
-        visual_bar = make_visual_bar(s['DPS'], s['Tank'], s['Heal'])
+        visual_bar = make_visual_bar(s['Total'], parsed_limits[t])
         limit_val = parsed_limits[t]
         limit_txt = f"/{limit_val}" if limit_val > 0 else ""
         
-        header_text = f"🔥 Total: {s['Total']}{limit_txt} (🛡️{s['Tank']} ⚔️{s['DPS']} 🌿{s['Heal']})\n{visual_bar}\n\n"
-        val = header_text + "\n"
+        # Header for the round
+        val = f"🔥 Total: {s['Total']}{limit_txt} (👑{s['Commander']} 🌿{s['Healer']} ⚔️{s['Fighter']})\n{visual_bar}\n\n"
         
-        if roster[t]["Main"]: val += "\n".join(roster[t]["Main"])
-        else: val += "*... ว่าง ...*"
-        if roster[t]["Late"]: val += "\n\n**🐢 มาสาย / Late Join**\n" + "\n".join(roster[t]["Late"])
-        if roster[t]["Standby"]: val += "\n\n**💤 สำรอง / Standby**\n" + "\n".join(roster[t]["Standby"])
-        val += "\n\u200b"
+        # 1. Commander
+        val += f"👑 **คนสั่ง (Commander) [{s['Commander']}/4]**\n"
+        if roster[t]["Commander"]: val += "\n".join(roster[t]["Commander"]) + "\n\n"
+        else: val += "> *... ว่าง ...*\n\n"
+        
+        # 2. Healer
+        val += f"🌿 **สายฮีล (Healer)**\n"
+        if roster[t]["Healer"]: val += "\n".join(roster[t]["Healer"]) + "\n\n"
+        else: val += "> *... ว่าง ...*\n\n"
+        
+        # 3. Fighter
+        val += f"⚔️ **หน่วยรบ (DPS/Tank)**\n"
+        if roster[t]["Fighter"]: val += "\n".join(roster[t]["Fighter"]) + "\n\n"
+        else: val += "> *... ว่าง ...*\n\n"
+        
+        # Late & Standby
+        if roster[t]["Late"]: val += "**🐢 มาสาย / Late Join**\n" + "\n".join(roster[t]["Late"]) + "\n\n"
+        if roster[t]["Standby"]: val += "**💤 สำรอง / Standby**\n" + "\n".join(roster[t]["Standby"]) + "\n"
+        
         embed.add_field(name=f"━━━━━━ TEAM {t.upper()} ━━━━━━", value=val, inline=False)
         
     if pre_late_list: 
@@ -415,7 +420,6 @@ def create_dashboard_embed(event_id):
     embed.set_footer(text=f"EVENT ID: #{event_id} | STATUS: {status_text} | Last Updated: {bangkok_now().strftime('%H:%M:%S')}")
     return embed
 
-# 🔥 1. แก้ไขดีไซน์ตารางแจ้งลาให้โปร่งและสวยขึ้น (ลดความเบียด)
 def create_leave_board_embed():
     leaves = get_all_leaves()
     short_term = []
@@ -423,56 +427,50 @@ def create_leave_board_embed():
     hiatus = []
     for uid, uname, ltype, dtext, exp, reason, role in leaves:
         role_txt = f" ({role})" if role else ""
-        
-        # จัดฟอร์แมตใหม่ให้มีการเว้นบรรทัดและใส่ Blockquote สวยงาม
-        if ltype == "hiatus": 
-            hiatus.append(f"> 💤 **{uname}**{role_txt}\n> └ 📝 เหตุผล: {reason} `[{dtext}]`")
-        elif ltype == "late": 
-            late_list.append(f"> 🐢 **{uname}**{role_txt}\n> └ ⏰ {dtext} *(เหตุผล: {reason})*")
-        else: 
-            short_term.append(f"> ❌ **{uname}**{role_txt}\n> └ 📝 เหตุผล: {reason} `[{dtext}]`")
+        if ltype == "hiatus": hiatus.append(f"> 💤 **{uname}**{role_txt}\n> └ 📝 เหตุผล: {reason} `[{dtext}]`")
+        elif ltype == "late": late_list.append(f"> 🐢 **{uname}**{role_txt}\n> └ ⏰ {dtext} *(เหตุผล: {reason})*")
+        else: short_term.append(f"> ❌ **{uname}**{role_txt}\n> └ 📝 เหตุผล: {reason} `[{dtext}]`")
             
     embed = discord.Embed(title="📋 บอร์ดแจ้งลาหยุด / พักรบกิลด์ 天狗", description="แอดมินและหัวหน้าหน่วยสามารถเช็ครายชื่อผู้ที่ไม่อยู่ได้ที่นี่\n*(ระบบจะเคลียร์รายชื่อเมื่อหมดเวลาอัตโนมัติ และลิงก์ชื่อเข้าตารางวอให้ทันที)*\n━━━━━━━━━━━━━━━━━━━━━━", color=0x34495e)
-    
-    # เพิ่ม \n\n เพื่อให้มีช่องไฟระหว่างรายชื่อแต่ละคน และ \n\u200b เพื่อเว้นวรรคหมวดหมู่
     val_short = "\n\n".join(short_term) if short_term else "> *... ไม่มีผู้ลาระยะสั้น ...*"
     embed.add_field(name="📅 ลาระยะสั้น (Short-term)", value=val_short + "\n\u200b", inline=False)
-    
-    if late_list:
-        embed.add_field(name="⏳ แจ้งมาสายล่วงหน้า (Late)", value="\n\n".join(late_list) + "\n\u200b", inline=False)
-        
+    if late_list: embed.add_field(name="⏳ แจ้งมาสายล่วงหน้า (Late)", value="\n\n".join(late_list) + "\n\u200b", inline=False)
     val_hiatus = "\n\n".join(hiatus) if hiatus else "> *... ไม่มีผู้ลาพักยาว ...*"
     embed.add_field(name="🛌 ลาพักยาว (Hiatus)", value=val_hiatus + "\n\u200b", inline=False)
-    
     embed.set_footer(text=f"อัปเดตอัตโนมัติล่าสุด: {bangkok_now().strftime('%d/%m/%Y %H:%M:%S')}")
     return embed
 
 def create_member_board_embed():
     data = get_all_members()
-    roster = {"DPS": [], "Tank": [], "Heal": []}
-    emojis = {"DPS": "⚔️", "Tank": "🛡️", "Heal": "🌿"}
-    for username, role, weapons in data:
+    roster = {"Commander": [], "Healer": [], "DPS": [], "Tank": []}
+    emojis = {"Commander": "👑", "Healer": "🌿", "DPS": "⚔️", "Tank": "🛡️"}
+    for username, role, _ in data:
         if role in roster:
             emoji = emojis.get(role, "👤")
-            wp_text = f"`{weapons}`" if weapons and weapons != "-" else "`ยังไม่ระบุอาวุธ`"
             num = len(roster[role]) + 1
-            roster[role].append(f"`> {num}.` {emoji} **{username}** - {wp_text}")
-    embed = discord.Embed(title="👺 ทำเนียบจอมยุทธ์กิลด์ 天狗", description="ลงทะเบียนสายตำแหน่งและอาวุธหลักของคุณ", color=0x2ecc71)
-    roles_info = [("DPS", "⚔️ สังกัดหน่วยโจมตี (DPS)", roster["DPS"]), ("Tank", "🛡️ สังกัดหน่วยป้องกัน (Tank)", roster["Tank"]), ("Heal", "🌿 สังกัดหน่วยสนับสนุน (Heal)", roster["Heal"])]
+            roster[role].append(f"`> {num}.` {emoji} **{username}**")
+            
+    embed = discord.Embed(title="👺 ทำเนียบจอมยุทธ์กิลด์ 天狗", description="ลงทะเบียนสายตำแหน่งหลักของคุณ (อัปเดตใหม่ไม่มีอาวุธ)", color=0x2ecc71)
+    roles_info = [
+        ("Commander", "👑 หน่วยบัญชาการ (Commander)", roster["Commander"]),
+        ("Healer", "🌿 สังกัดหน่วยสนับสนุน (Healer)", roster["Healer"]),
+        ("DPS", "⚔️ สังกัดหน่วยโจมตี (DPS)", roster["DPS"]), 
+        ("Tank", "🛡️ สังกัดหน่วยป้องกัน (Tank)", roster["Tank"])
+    ]
     for role_key, role_title, members_list in roles_info:
-        val = "\n".join(members_list) if members_list else "*... ยังไม่มีจอมยุทธ์ในสังกัดนี้ ...*"
+        val = "\n".join(members_list) if members_list else "*... ว่าง ...*"
         embed.add_field(name=f"{role_title} ({len(members_list)} คน)", value=val, inline=False)
     embed.set_footer(text=f"อัปเดตล่าสุด: {bangkok_now().strftime('%d/%m/%Y %H:%M')}")
     return embed
 
 # ==========================================
-# 🛠️ SETUP SYSTEM (Guild War - ปรับปรุงระบบโควต้าทีม)
+# 🛠️ SETUP SYSTEM (เปลี่ยนค่าเริ่มต้นเป็น 20.00 และ 21.00)
 # ==========================================
 def get_session(user_id):
     if user_id not in setup_sessions:
         setup_sessions[user_id] = {
-            "title": "Guild War Roster", "date": "Today", "time": "19:30", 
-            "teams": [{"name": "Team ATK", "limit": 0}, {"name": "Team Flex", "limit": 0}], 
+            "title": "Guild War Roster", "date": "Today", "time": "20:00", 
+            "teams": [{"name": "20.00", "limit": 0}, {"name": "21.00", "limit": 0}], 
             "color": 0x3498db
         }
     return setup_sessions[user_id]
@@ -485,10 +483,10 @@ def create_setup_embed(user_id):
     embed = discord.Embed(title="🛠️ ตั้งค่าตารางวอ (Setup Mode)", description="ปรับแต่งข้อมูลก่อนประกาศจริง", color=s['color'])
     embed.add_field(name="📝 หัวข้อ", value=s["title"], inline=False)
     embed.add_field(name="📅 วันที่", value=full_date_preview, inline=True)
-    embed.add_field(name="⏰ เวลา", value=s["time"], inline=True)
+    embed.add_field(name="⏰ เวลาเริ่มต้น", value=s["time"], inline=True)
     
-    teams_str = "\n".join([f"- {t['name']} (จำกัด: {t['limit']} คน)" if t['limit']>0 else f"- {t['name']} (ไม่จำกัด)" for t in s["teams"]])
-    embed.add_field(name=f"🛡️ ทีมทั้งหมด ({len(s['teams'])})", value=f"```\n{teams_str}\n```", inline=False)
+    teams_str = "\n".join([f"- รอบ {t['name']} (จำกัด: {t['limit']} คน)" if t['limit']>0 else f"- รอบ {t['name']} (ไม่จำกัด)" for t in s["teams"]])
+    embed.add_field(name=f"🛡️ รอบเวลาที่เปิด ({len(s['teams'])})", value=f"```\n{teams_str}\n```", inline=False)
     embed.add_field(name="🎨 สีธีม", value=f"`{color_hex}`", inline=False)
     return embed
 
@@ -497,7 +495,7 @@ class ConfigModal(Modal, title='แก้ไขข้อมูล'):
         super().__init__()
         self.mode = mode
         if mode == 'title': self.inp = TextInput(label='หัวข้อ', placeholder='Guild War')
-        elif mode == 'time': self.inp = TextInput(label='เวลา (HH:MM)', placeholder='19:30', max_length=5)
+        elif mode == 'time': self.inp = TextInput(label='เวลา (HH:MM)', placeholder='20:00', max_length=5)
         elif mode == 'date_manual': self.inp = TextInput(label='วันที่ (DD/MM)', placeholder='15/02')
         self.add_item(self.inp)
 
@@ -512,31 +510,23 @@ class ConfigModal(Modal, title='แก้ไขข้อมูล'):
         elif self.mode == 'date_manual': s['date'] = val
         await interaction.response.edit_message(embed=create_setup_embed(interaction.user.id), view=SetupView())
 
-class AddTeamModal(Modal, title='เพิ่มทีมใหม่'):
+class AddTeamModal(Modal, title='เพิ่มรอบเวลา'):
     def __init__(self):
         super().__init__()
-        self.team_name = TextInput(label='ชื่อทีม', placeholder='เช่น Team Def', max_length=20)
+        self.team_name = TextInput(label='ชื่อรอบ', placeholder='เช่น 22.00', max_length=20)
         self.add_item(self.team_name)
     async def on_submit(self, interaction: discord.Interaction):
         s = get_session(interaction.user.id)
         s['teams'].append({"name": self.team_name.value.strip(), "limit": 0})
         await interaction.response.edit_message(embed=create_setup_embed(interaction.user.id), view=SetupView())
 
-# 🔥 2. แก้ไขระบบจำกัดคนให้แก้ไขทีเดียวทุกทีม
-class MultiLimitModal(Modal, title='กำหนดโควต้าตัวจริง (ทุกทีม)'):
+class MultiLimitModal(Modal, title='กำหนดโควต้าตัวจริง (ทุกรอบ)'):
     def __init__(self, user_id):
         super().__init__()
         self.s = get_session(user_id)
         self.inputs = []
-        # ดึงทีมทั้งหมดมาแสดงในหน้าต่างเดียว (Discord จำกัดสูงสุด 5 ช่อง)
         for t in self.s['teams'][:5]:
-            inp = TextInput(
-                label=f"โควต้า: {t['name']}", 
-                placeholder='ใส่ตัวเลข (0 = ไม่จำกัด)', 
-                default=str(t['limit']), 
-                max_length=3,
-                required=True
-            )
+            inp = TextInput(label=f"โควต้ารอบ: {t['name']}", placeholder='ใส่ตัวเลข (0 = ไม่จำกัด)', default=str(t['limit']), max_length=3, required=True)
             self.add_item(inp)
             self.inputs.append(inp)
 
@@ -599,7 +589,7 @@ class SetupView(View):
     async def edit_color(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_message("เลือกสีธีม:", view=ColorPickerView(), ephemeral=True)
     
-    @discord.ui.button(label="👥 เพิ่มทีม", style=discord.ButtonStyle.success, row=2)
+    @discord.ui.button(label="👥 เพิ่มรอบเวลา", style=discord.ButtonStyle.success, row=2)
     async def add_team(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(AddTeamModal())
         
@@ -607,11 +597,10 @@ class SetupView(View):
     async def set_limit(self, interaction: discord.Interaction, button: Button):
         s = get_session(interaction.user.id)
         if not s['teams']:
-            return await interaction.response.send_message("❌ ยังไม่มีทีม กรุณาเพิ่มทีมก่อน", ephemeral=True)
-        # กดปุ่มนี้แล้ว Modal เด้งขึ้นมาให้ปรับทุกทีมพร้อมกันเลย
+            return await interaction.response.send_message("❌ ยังไม่มีรอบ กรุณาเพิ่มรอบก่อน", ephemeral=True)
         await interaction.response.send_modal(MultiLimitModal(interaction.user.id))
         
-    @discord.ui.button(label="➖ ลบทีมล่าสุด", style=discord.ButtonStyle.danger, row=2)
+    @discord.ui.button(label="➖ ลบรอบล่าสุด", style=discord.ButtonStyle.danger, row=2)
     async def remove_team(self, interaction: discord.Interaction, button: Button):
         s = get_session(interaction.user.id)
         if len(s['teams']) > 1: s['teams'].pop()
@@ -636,7 +625,7 @@ class SetupView(View):
         except: pass
 
 # ==========================================
-# 📝 ALL-IN-ONE REGISTRATION UI
+# 📝 ALL-IN-ONE REGISTRATION UI (แก้ไขเลือกรอบได้อิสระ)
 # ==========================================
 class RegistrationView(discord.ui.View):
     def __init__(self, event_id, dashboard_msg, parsed_teams):
@@ -644,42 +633,35 @@ class RegistrationView(discord.ui.View):
         self.event_id = event_id
         self.dashboard_msg = dashboard_msg
         
-        self.sel_team = Select(placeholder="1️⃣ เลือกทีมที่ต้องการลง / ย้าย...", options=[discord.SelectOption(label=t) for t in parsed_teams], row=0)
-        self.sel_role = Select(placeholder="2️⃣ เลือกตำแหน่งหลักของคุณ...", options=[
+        # 1. เลือกรอบ (กดเลือกได้มากกว่า 1)
+        round_opts = [discord.SelectOption(label=t, emoji="⏰") for t in parsed_teams]
+        self.sel_round = Select(placeholder="1️⃣ เลือกรอบที่ต้องการลง (เลือกกี่รอบก็ได้)...", min_values=1, max_values=len(parsed_teams), options=round_opts, row=0)
+        
+        # 2. เลือกตำแหน่ง (อัปเดตใหม่)
+        self.sel_role = Select(placeholder="2️⃣ เลือกตำแหน่งของคุณ...", options=[
+            discord.SelectOption(label="Commander (คนสั่ง)", value="Commander", emoji="👑"),
+            discord.SelectOption(label="Healer (สายฮีล)", value="Healer", emoji="🌿"),
+            discord.SelectOption(label="DPS", value="DPS", emoji="⚔️"),
             discord.SelectOption(label="Tank", value="Tank", emoji="🛡️"),
-            discord.SelectOption(label="Main DPS", value="DPS", emoji="⚔️"),
-            discord.SelectOption(label="Healer", value="Heal", emoji="🌿"),
         ], row=1)
         
-        status_opts = [discord.SelectOption(label="🔥 อยู่ยาว / Full Time", value="Full Time", emoji="🔥")]
-        for i in range(1, 9): status_opts.append(discord.SelectOption(label=f"Round {i}", value=f"Round {i}", emoji="🔹"))
-        status_opts.append(discord.SelectOption(label="🐢 ตามทีหลัง / Late Join", value="Late Join", emoji="🐢"))
-        status_opts.append(discord.SelectOption(label="💤 สแตนด์บาย / Standby", value="Standby", emoji="💤"))
-        self.sel_status = Select(placeholder="3️⃣ เลือกความพร้อม (กดเลือกได้หลายรอบ)...", min_values=1, max_values=len(status_opts), options=status_opts, row=2)
-        
-        weapon_opts = [
-            discord.SelectOption(label="Nameless Sword", emoji="⚔️"), discord.SelectOption(label="Nameless Spear", emoji="🦯"),
-            discord.SelectOption(label="Strategic Sword", emoji="🩸"), discord.SelectOption(label="Heavenquaker Spear", emoji="🩸"),
-            discord.SelectOption(label="Thundercry Blade", emoji="⚡"), discord.SelectOption(label="Stormbreaker Spear", emoji="🛡️"),
-            discord.SelectOption(label="Infernal Twinblades", emoji="⚔️"), discord.SelectOption(label="Mortal Rope Dart", emoji="🪢"),
-            discord.SelectOption(label="Vernal Umbrella", emoji="☂️"), discord.SelectOption(label="Soulshade Umbrella", emoji="🌿"),
-            discord.SelectOption(label="Inkwell Fan", emoji="🪭"), discord.SelectOption(label="Panacea Fan", emoji="🍃"),
-            discord.SelectOption(label="Hengdao", emoji="🗡️"), discord.SelectOption(label="Gauntlets", emoji="🥊"),
-            discord.SelectOption(label="Zui Meng You Chun", emoji="🌂"), discord.SelectOption(label="Su Zi Xing Yun", emoji="⛓️")
+        # 3. เลือกสถานะ
+        status_opts = [
+            discord.SelectOption(label="🔥 พร้อมลุย / Full Time", value="Full Time", emoji="🔥"),
+            discord.SelectOption(label="🐢 ตามทีหลัง / Late Join", value="Late Join", emoji="🐢"),
+            discord.SelectOption(label="💤 สแตนด์บาย / Standby", value="Standby", emoji="💤")
         ]
-        self.sel_weapon = Select(placeholder="4️⃣ เลือกอาวุธคู่กาย (1 ถึง 2 ชิ้น)...", min_values=1, max_values=2, options=weapon_opts, row=3)
+        self.sel_status = Select(placeholder="3️⃣ เลือกความพร้อม...", min_values=1, max_values=1, options=status_opts, row=2)
         
-        self.sel_team.callback = self.dummy_callback
+        self.sel_round.callback = self.dummy_callback
         self.sel_role.callback = self.dummy_callback
         self.sel_status.callback = self.dummy_callback
-        self.sel_weapon.callback = self.dummy_callback
         
-        self.add_item(self.sel_team)
+        self.add_item(self.sel_round)
         self.add_item(self.sel_role)
         self.add_item(self.sel_status)
-        self.add_item(self.sel_weapon)
         
-        btn_submit = Button(label="✅ บันทึกข้อมูลลงตาราง", style=discord.ButtonStyle.success, row=4)
+        btn_submit = Button(label="✅ บันทึกข้อมูลลงตาราง", style=discord.ButtonStyle.success, row=3)
         btn_submit.callback = self.submit
         self.add_item(btn_submit)
 
@@ -687,43 +669,60 @@ class RegistrationView(discord.ui.View):
         await interaction.response.defer()
 
     async def submit(self, interaction: discord.Interaction):
-        if not self.sel_team.values or not self.sel_role.values or not self.sel_status.values or not self.sel_weapon.values:
-            return await interaction.response.send_message("⚠️ **กรุณาเลือกข้อมูลให้ครบทั้ง 4 ช่องก่อนกดบันทึกครับ!**", ephemeral=True)
+        if not self.sel_round.values or not self.sel_role.values or not self.sel_status.values:
+            return await interaction.response.send_message("⚠️ **กรุณาเลือกข้อมูลให้ครบทั้ง 3 ช่องก่อนกดบันทึกครับ!**", ephemeral=True)
             
-        team = self.sel_team.values[0]
+        selected_rounds = self.sel_round.values
+        team_string = ", ".join(selected_rounds) # เก็บค่าเป็น "20.00, 21.00"
         role = self.sel_role.values[0]
-        status = ", ".join(self.sel_status.values)
-        weapons = " + ".join(self.sel_weapon.values)
+        status = self.sel_status.values[0]
+        weapons = "-" # ปิดระบบอาวุธ
         
         ev = get_event(self.event_id)
         if not ev or ev[8] == 0: return await interaction.response.send_message("🔒 งานนี้ปิดลงชื่อแล้ว", ephemeral=True)
         
-        limit = 0
-        for t_str in ev[4].split(","):
-            if "|" in t_str:
-                n, l = t_str.split("|")
-                if n == team: limit = int(l)
+        # 🛡️ 1. เช็คโควต้าคนสั่ง (ล็อกไว้ 4 คนต่อรอบ)
+        if role == "Commander" and "Late" not in status and "Standby" not in status:
+            conn = sqlite3.connect(DB_NAME)
+            c = conn.cursor()
+            for r in selected_rounds:
+                c.execute("SELECT user_id FROM registrations WHERE event_id=? AND role='Commander' AND team LIKE ?", (self.event_id, f"%{r}%"))
+                existing = c.fetchall()
+                main_count = sum(1 for uid, in existing if uid != interaction.user.id)
+                if main_count >= 4:
+                    conn.close()
+                    return await interaction.response.send_message(f"⚠️ **ตำแหน่งคนสั่งของรอบ {r} เต็มแล้ว (4 คน)!**\nกรุณาเลือกรอบอื่น หรือเปลี่ยนตำแหน่งเป็นสายฮีล/ดาเมจครับ", ephemeral=True)
+            conn.close()
         
+        # 🛡️ 2. เช็คโควต้ารวมของรอบ (ถ้าล้นให้ไป Standby)
         final_status = status
         alert_msg = "✅ **บันทึกข้อมูลเรียบร้อยแล้ว! (ข้อมูลอัปเดตลงตารางแล้ว)**"
         
-        if limit > 0 and "Late" not in final_status and "Standby" not in final_status:
-            conn = sqlite3.connect(DB_NAME)
-            c = conn.cursor()
-            c.execute("SELECT user_id, time_text FROM registrations WHERE event_id=? AND team=?", (self.event_id, team))
-            existing = c.fetchall()
-            conn.close()
-            main_count = sum(1 for uid, tt in existing if uid != interaction.user.id and "Late" not in tt and "Standby" not in tt)
-            if main_count >= limit:
-                final_status = "Standby"
-                alert_msg = f"⚠️ **ทีม {team} โควต้าตัวจริงเต็มแล้ว ({limit} คน)!**\nระบบได้ย้ายคุณไปอยู่หมวด **สำรอง (Standby)** ให้อัตโนมัติ"
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        for r in selected_rounds:
+            limit = 0
+            for t_str in ev[4].split(","):
+                if "|" in t_str:
+                    n, l = t_str.split("|")
+                    if n == r: limit = int(l)
+            
+            if limit > 0 and "Late" not in final_status and "Standby" not in final_status:
+                c.execute("SELECT user_id, time_text FROM registrations WHERE event_id=? AND team LIKE ?", (self.event_id, f"%{r}%"))
+                existing = c.fetchall()
+                main_count = sum(1 for uid, tt in existing if uid != interaction.user.id and "Late" not in tt and "Standby" not in tt)
+                if main_count >= limit:
+                    final_status = "Standby"
+                    alert_msg = f"⚠️ **รอบ {r} โควต้าตัวจริงเต็มแล้ว ({limit} คน)!**\nระบบได้ย้ายคุณไปอยู่หมวด **สำรอง (Standby)** ให้อัตโนมัติ"
+                    break # ถ้าล้นรอบใดรอบนึง จับ Standby หมดเลยเพื่อความปลอดภัย
+        conn.close()
 
-        reg_upsert(self.event_id, interaction.user.id, interaction.user.display_name, team, role, final_status, weapons)
+        reg_upsert(self.event_id, interaction.user.id, interaction.user.display_name, team_string, role, final_status, weapons)
         
         try: await self.dashboard_msg.edit(embed=create_dashboard_embed(self.event_id))
         except: pass
         
-        await send_log(interaction.client, "Join/Edit", f"ลงชื่อ/อัปเดตทีม **{team}**\nตำแหน่ง: {role}\nสถานะ: {final_status}\nอาวุธ: {weapons}", interaction.user)
+        await send_log(interaction.client, "Join/Edit", f"ลงชื่อรอบ: **{team_string}**\nตำแหน่ง: {role}\nสถานะ: {final_status}", interaction.user)
         await interaction.response.edit_message(content=alert_msg, view=None)
 
 # ==========================================
@@ -771,9 +770,10 @@ class PersistentWarView(View):
         btn_refresh.callback = self.refresh
         self.add_item(btn_refresh)
 
-        btn_weapons = Button(label="🔍 เช็คอาวุธ", style=discord.ButtonStyle.primary, row=1, custom_id=f"war_wp_{event_id}")
-        btn_weapons.callback = self.check_weapons
-        self.add_item(btn_weapons)
+        # 🔍 ปุ่มใหม่: เช็ครอบลงแทนปุ่มอาวุธ
+        btn_check = Button(label="🔍 เช็ครอบลง", style=discord.ButtonStyle.primary, row=1, custom_id=f"war_chk_{event_id}")
+        btn_check.callback = self.check_rounds
+        self.add_item(btn_check)
 
         btn_copy = Button(label="📋 Copy", style=discord.ButtonStyle.secondary, row=1, custom_id=f"war_copy_{event_id}")
         btn_copy.callback = self.copy
@@ -785,7 +785,7 @@ class PersistentWarView(View):
         
         parsed_teams = [t_str.split("|")[0] if "|" in t_str else t_str for t_str in ev[4].split(",")]
         view = RegistrationView(self.event_id, interaction.message, parsed_teams)
-        await interaction.response.send_message("👇 **กรุณาเลือกข้อมูลให้ครบทั้ง 4 ช่อง เพื่อลงชื่อหรือแก้ไข:**", view=view, ephemeral=True)
+        await interaction.response.send_message("👇 **กรุณาเลือกข้อมูลให้ครบทั้ง 3 ช่อง เพื่อลงชื่อหรือแก้ไข:**", view=view, ephemeral=True)
 
     async def leave(self, interaction: discord.Interaction):
         view = ConfirmLeaveView(self.event_id, interaction.message)
@@ -794,29 +794,33 @@ class PersistentWarView(View):
     async def refresh(self, interaction: discord.Interaction):
         await interaction.response.edit_message(embed=create_dashboard_embed(self.event_id))
 
-    async def check_weapons(self, interaction: discord.Interaction):
+    # ฟังก์ชันใหม่: เช็คว่าใครลงรอบไหนบ้าง
+    async def check_rounds(self, interaction: discord.Interaction):
         data = get_roster(self.event_id)
         ev = get_event(self.event_id)
         if not ev: return
+        
         parsed_teams = [t.split("|")[0] if "|" in t else t for t in ev[4].split(",")]
+        embed = discord.Embed(title=f"🔍 เช็ครอบลงกิลด์วอ (Event #{self.event_id})", color=0x3498db)
         
-        embed = discord.Embed(title=f"🔍 ข้อมูลอาวุธ Event #{self.event_id}", color=0x2ecc71)
-        found_any = False
         for t in parsed_teams:
-            team_players = [p for p in data if p[2] == t]
-            if not team_players: continue
+            # ดึงคนที่เลือกรอบนี้ (คนลง 2 รอบก็จะโชว์ด้วย)
+            players = [p for p in data if p[2] != "Absence" and t in p[2]]
             val = ""
-            for p in team_players:
-                username, _, role, _, weapons = p[1], p[2], p[3], p[4], p[5]
-                if t == "Absence": continue
-                emoji = "⚔️" if "DPS" in role else "🛡️" if "Tank" in role else "🌿"
-                wp_text = weapons if weapons and weapons != "-" else "ยังไม่ระบุ"
-                val += f"{emoji} **{username}** : `{wp_text}`\n"
-            if val:
-                found_any = True
-                embed.add_field(name=f"━━━━━━ TEAM {t.upper()} ━━━━━━", value=val, inline=False)
+            for p in players:
+                emoji = "👑" if p[3] == "Commander" else "🌿" if p[3] == "Healer" else "🛡️" if p[3] == "Tank" else "⚔️"
+                status_txt = f"[{p[4]}]" if p[4] != "Full Time" else ""
+                val += f"{emoji} **{p[1]}** {status_txt}\n"
+            
+            if not val: val = "- ว่าง -"
+            embed.add_field(name=f"⏰ รอบ {t}", value=val, inline=True)
         
-        if not found_any: embed.description = "ยังไม่มีข้อมูลอาวุธ"
+        # แถมพิเศษ: แยกคนที่ลงควบ 2 รอบให้เห็นชัดๆ
+        both_players = [p for p in data if p[2] != "Absence" and len(p[2].split(", ")) > 1]
+        if both_players:
+            val = "\n".join([f"**{p[1]}** ({p[3]})" for p in both_players])
+            embed.add_field(name="🔥 ผู้เล่นที่ลงควบ 2 รอบขึ้นไป", value=val, inline=False)
+            
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     async def absence(self, interaction: discord.Interaction):
@@ -830,21 +834,25 @@ class PersistentWarView(View):
         
         txt = f"```text\n📋 สรุปรายชื่อ Event #{self.event_id}\n=========================\n"
         for t in parsed_teams:
-            team_players = [p for p in data if p[2] == t]
+            # หาผู้เล่นในรอบนี้
+            team_players = [p for p in data if p[2] != "Absence" and t in p[2]]
             if not team_players: continue
-            txt += f"🛡️ {t.upper()}\n"
+            
+            txt += f"🛡️ รอบ {t.upper()}\n"
             main = [p for p in team_players if "Late" not in p[4] and "Standby" not in p[4]]
             late = [p for p in team_players if "Late" in p[4]]
             standby = [p for p in team_players if "Standby" in p[4]]
-            for i, p in enumerate(main, 1): txt += f"{i}. {p[1]} ({p[3]}) - {p[4]} [{p[5]}]\n"
+            
+            for i, p in enumerate(main, 1): txt += f"{i}. {p[1]} ({p[3]}) - {p[4]}\n"
             if late:
                 txt += "\n*🐢 สาย (Late):*\n"
-                for p in late: txt += f"- {p[1]} ({p[3]}) [{p[5]}]\n"
+                for p in late: txt += f"- {p[1]} ({p[3]})\n"
             if standby:
                 txt += "\n*💤 สำรอง (Standby):*\n"
-                for p in standby: txt += f"- {p[1]} ({p[3]}) [{p[5]}]\n"
+                for p in standby: txt += f"- {p[1]} ({p[3]})\n"
             txt += "-------------------------\n"
-        txt += "```"
+        txt += "
+```"
         await interaction.response.send_message(txt, ephemeral=True)
 
 class AbsenceModal(Modal, title='แบบฟอร์มแจ้งลา (เฉพาะวอรอบนี้)'):
@@ -957,8 +965,26 @@ class LeaveBoardView(View):
         await interaction.response.edit_message(embed=create_leave_board_embed())
 
 # ==========================================
-# 🤖 BOT COMMANDS / MEMBER BOARD
+# 🤖 BOT COMMANDS / MEMBER BOARD (อัปเดตลบอาวุธ)
 # ==========================================
+class MemberRoleSelect(Select):
+    def __init__(self, message):
+        self.message = message
+        options = [
+            discord.SelectOption(label="Commander (คนสั่ง)", value="Commander", emoji="👑"),
+            discord.SelectOption(label="Healer (สายฮีล)", value="Healer", emoji="🌿"),
+            discord.SelectOption(label="DPS", value="DPS", emoji="⚔️"),
+            discord.SelectOption(label="Tank", value="Tank", emoji="🛡️"),
+        ]
+        super().__init__(placeholder="เลือกตำแหน่งหลักของคุณ...", min_values=1, max_values=1, options=options)
+        
+    async def callback(self, interaction: discord.Interaction):
+        role = self.values[0]
+        member_upsert(interaction.user.id, interaction.user.display_name, role, "-")
+        await interaction.response.edit_message(content=f"✅ ลงทะเบียนสาย **{role}** เรียบร้อย!", view=None)
+        try: await self.message.edit(embed=create_member_board_embed())
+        except: pass
+
 class MemberBoardView(View):
     def __init__(self): super().__init__(timeout=None)
     @discord.ui.button(label="📝 ลงทะเบียน / แก้ไขตำแหน่ง", style=discord.ButtonStyle.success, row=1, custom_id="member_reg")
