@@ -35,6 +35,8 @@ def init_db():
                 color INTEGER DEFAULT 3447003, channel_id INTEGER, message_id INTEGER, active INTEGER DEFAULT 1)''')
     try: c.execute("ALTER TABLE events ADD COLUMN team_limit INTEGER DEFAULT 0")
     except: pass
+    try: c.execute("ALTER TABLE events ADD COLUMN healer_limit INTEGER DEFAULT 8")
+    except: pass
     c.execute('''CREATE TABLE IF NOT EXISTS registrations
                 (event_id INTEGER, user_id INTEGER, username TEXT, team TEXT, role TEXT, time_text TEXT, weapons TEXT, joined_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (event_id, user_id))''')
     c.execute('''CREATE TABLE IF NOT EXISTS guild_members
@@ -48,11 +50,11 @@ def init_db():
     conn.commit()
     conn.close()
 
-def create_event(title, date_str, time_str, teams_list, color):
+def create_event(title, date_str, time_str, teams_list, color, healer_limit=8):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     teams_str = ",".join([f"{t['name']}|{t['limit']}" for t in teams_list])
-    c.execute("INSERT INTO events (title, date_str, time_str, teams, color, active, team_limit) VALUES (?, ?, ?, ?, ?, 1, 0)", (title, date_str, time_str, teams_str, color))
+    c.execute("INSERT INTO events (title, date_str, time_str, teams, color, active, team_limit, healer_limit) VALUES (?, ?, ?, ?, ?, 1, 0, ?)", (title, date_str, time_str, teams_str, color, healer_limit))
     eid = c.lastrowid
     conn.commit()
     conn.close()
@@ -1008,6 +1010,27 @@ class LeaveBoardView(View):
     @discord.ui.button(label="🔄 รีเฟรชบอร์ด", style=discord.ButtonStyle.secondary, row=1, custom_id="lv_ref")
     async def ref_leave(self, interaction: discord.Interaction, button: Button):
         await interaction.response.edit_message(embed=create_leave_board_embed())
+    @discord.ui.button(label="🗑️ เคลียร์ทั้งหมด (Admin)", style=discord.ButtonStyle.danger, row=2, custom_id="lv_clear_all")
+    async def clear_all_leave(self, interaction: discord.Interaction, button: Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ เฉพาะแอดมินเท่านั้น", ephemeral=True)
+        view = ConfirmClearLeaveView()
+        await interaction.response.send_message("⚠️ **ยืนยันเคลียร์รายชื่อบอร์ดลาทั้งหมดหรือไม่?**", view=view, ephemeral=True)
+
+class ConfirmClearLeaveView(View):
+    def __init__(self): super().__init__(timeout=30)
+    @discord.ui.button(label="✅ ยืนยันเคลียร์", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: Button):
+        conn = sqlite3.connect(DB_NAME)
+        conn.execute("DELETE FROM leave_records")
+        conn.commit()
+        conn.close()
+        await refresh_leave_board(interaction.client)
+        await refresh_all_active_wars(interaction.client)
+        await interaction.response.edit_message(content="🗑️ **เคลียร์บอร์ดลาทั้งหมดเรียบร้อยแล้ว!**", view=None)
+    @discord.ui.button(label="❌ ยกเลิก", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.edit_message(content="❌ ยกเลิก", view=None)
 
 # ==========================================
 # 🤖 BOT COMMANDS / MEMBER BOARD
