@@ -482,7 +482,8 @@ def get_session(user_id):
         setup_sessions[user_id] = {
             "title": "Guild War Roster", "date": "Today", "time": "20:00", 
             "teams": [{"name": "20.00", "limit": 0}, {"name": "21.00", "limit": 0}], 
-            "color": 0x3498db
+            "color": 0x3498db,
+            "healer_limit": 8
         }
     return setup_sessions[user_id]
 
@@ -498,7 +499,8 @@ def create_setup_embed(user_id):
     
     teams_str = "\n".join([f"- รอบ {t['name']} (จำกัด: {t['limit']} คน)" if t['limit']>0 else f"- รอบ {t['name']} (ไม่จำกัด)" for t in s["teams"]])
     embed.add_field(name=f"🛡️ รอบเวลาที่เปิด ({len(s['teams'])})", value=f"```\n{teams_str}\n```", inline=False)
-    embed.add_field(name="🎨 สีธีม", value=f"`{color_hex}`", inline=False)
+    embed.add_field(name="🌿 โควต้าฮีลต่อรอบ", value=f"`{s.get('healer_limit', 8)} คน/รอบ`", inline=True)
+    embed.add_field(name="🎨 สีธีม", value=f"`{color_hex}`", inline=True)
     return embed
 
 class ConfigModal(Modal, title='แก้ไขข้อมูล'):
@@ -546,6 +548,27 @@ class MultiLimitModal(Modal, title='กำหนดโควต้าตัว�
             try: lim = int(inp.value)
             except: lim = 0
             self.s['teams'][i]['limit'] = lim
+        await interaction.response.edit_message(embed=create_setup_embed(interaction.user.id), view=SetupView())
+
+class HealerLimitModal(Modal, title='กำหนดโควต้าฮีลต่อรอบ'):
+    def __init__(self, user_id):
+        super().__init__()
+        self.user_id = user_id
+        s = get_session(user_id)
+        self.inp = TextInput(
+            label='จำนวนฮีลสูงสุดต่อรอบ (คน)',
+            placeholder='ใส่ตัวเลข เช่น 8',
+            default=str(s.get('healer_limit', 8)),
+            max_length=3,
+            required=True
+        )
+        self.add_item(self.inp)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        s = get_session(self.user_id)
+        try: lim = max(1, int(self.inp.value))
+        except: lim = 8
+        s['healer_limit'] = lim
         await interaction.response.edit_message(embed=create_setup_embed(interaction.user.id), view=SetupView())
 
 class DatePickerView(View):
@@ -610,6 +633,10 @@ class SetupView(View):
         if not s['teams']:
             return await interaction.response.send_message("❌ ยังไม่มีรอบ กรุณาเพิ่มรอบก่อน", ephemeral=True)
         await interaction.response.send_modal(MultiLimitModal(interaction.user.id))
+
+    @discord.ui.button(label="🌿 โควต้าฮีล", style=discord.ButtonStyle.primary, row=2)
+    async def set_healer_limit(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_modal(HealerLimitModal(interaction.user.id))
         
     @discord.ui.button(label="➖ ลบรอบล่าสุด", style=discord.ButtonStyle.danger, row=2)
     async def remove_team(self, interaction: discord.Interaction, button: Button):
@@ -621,7 +648,7 @@ class SetupView(View):
     async def confirm(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer() 
         s = get_session(interaction.user.id)
-        ev_id = create_event(s['title'], s['date'], s['time'], s['teams'], s['color'])
+        ev_id = create_event(s['title'], s['date'], s['time'], s['teams'], s['color'], s.get('healer_limit', 8))
         embed = create_dashboard_embed(ev_id)
         view = PersistentWarView(ev_id)
         msg = await interaction.channel.send(embed=embed, view=view)
