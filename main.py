@@ -347,9 +347,8 @@ def create_dashboard_embed(event_id):
         # 👑 Commander ถูกจับรวมกันทั้งหมด (ไม่ต้องสนรอบ)
         if role == "Commander":
             if is_main:
-                bar = "🟢🟢🟢🟢 🟢🟢🟢🟢"
                 num = len(global_commanders) + 1
-                global_commanders.append(f"`> {num:02}.` `{bar}` | {emoji} **{username}** `[ลงรอบ: {p_team}]`")
+                global_commanders.append(f"`> {num:02}.` {emoji} **{username}** `[ลงรอบ: {p_team}]`")
             elif is_late:
                 global_commanders.append(f"🐢 **{username}** [Late]")
             elif is_standby:
@@ -365,13 +364,12 @@ def create_dashboard_embed(event_id):
                 else: stats[t]["Fighter"] += 1
                 
             if is_main:
-                bar = "🟢🟢🟢🟢 🟢🟢🟢🟢"
                 if role == "Healer":
                     num = len(global_roles["Healer"][t]) + 1
-                    global_roles["Healer"][t].append(f"`> {num:02}.` `{bar}` | {emoji} **{username}**")
+                    global_roles["Healer"][t].append(f"`> {num:02}.` {emoji} **{username}**")
                 else:
                     num = len(roster[t]["Fighter"]) + 1
-                    roster[t]["Fighter"].append(f"`> {num:02}.` `{bar}` | {emoji} **{username}**")
+                    roster[t]["Fighter"].append(f"`> {num:02}.` {emoji} **{username}**")
             elif is_late:
                 roster[t]["Late"].append(f"🐢 **{username}** [Late]")
             elif is_standby:
