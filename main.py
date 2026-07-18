@@ -1310,4 +1310,5 @@ async def auto_reminder():
         asyncio.create_task(refresh_all_active_wars(bot))
     conn.close()
 
-bot.run('Y')
+import os
+bot.run(os.environ.get('TOKEN'))
